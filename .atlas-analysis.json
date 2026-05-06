@@ -1,0 +1,98 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "classicborne",
+  "projectDescription": "A general-purpose Node.js library for building Minecraft Classic servers with CPE support, providing extensible base classes for universes, levels, and players.",
+  "theme": "palm",
+  "primaryColor": "#4A7C59",
+  "lightColor": "#6BAF80",
+  "darkColor": "#2E5C3E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/universe",
+              "concepts/levels",
+              "concepts/players",
+              "concepts/persistence"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/extending-classes",
+              "guides/level-management",
+              "guides/cpe-support",
+              "guides/change-record"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Server",
+            "pages": ["api/base-universe", "api/base-heartbeat"]
+          },
+          {
+            "group": "Players",
+            "pages": ["api/base-player", "api/watchdog"]
+          },
+          {
+            "group": "Levels",
+            "pages": [
+              "api/base-level",
+              "api/base-template",
+              "api/base-level-command-interpreter"
+            ]
+          },
+          {
+            "group": "Drones",
+            "pages": ["api/drone", "api/drone-transmitter", "api/ego"]
+          },
+          {
+            "group": "Persistence",
+            "pages": [
+              "api/change-record",
+              "api/keyframe-record",
+              "api/null-change-record"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Classic Protocol Extension (CPE) support for enhanced client features",
+    "Extensible base classes (BaseUniverse, BaseLevel, BasePlayer) for custom server logic",
+    "Multiple level management with per-universe level registry",
+    "Novel append-only block change persistence with optional keyframe snapshots",
+    "Per-client entity ID assignment via drone system",
+    "Watchdog client monitor for rate-limiting block operations",
+    "ClassiCube server list heartbeat integration",
+    "Interactive level command interpreter with undo-capable action recording"
+  ],
+  "publicApiSurface": [
+    "BaseUniverse — manages server lifecycle, players, and loaded levels",
+    "BaseHeartbeat — sends periodic heartbeats to ClassiCube server list",
+    "BasePlayer — handles player authentication, messaging, and block interactions",
+    "Watchdog — rate-limits player block operations to prevent abuse",
+    "BaseLevel — manages level state, blocks, players, drones, and persistence",
+    "BaseTemplate / EmptyTemplate — generates level block buffers from templates",
+    "BaseLevelCommandInterpreter — interprets and records interactive level commands",
+    "Drone — entity representation for players and NPCs in levels",
+    "DroneTransmitter — synchronizes drone positions to clients",
+    "Ego — defines drone appearance (name, skin)",
+    "ChangeRecord — append-only block change persistence with keyframe support",
+    "KeyframeRecord — SQLite-backed keyframe snapshots for fast level restoration",
+    "NullChangeRecord — no-op change record for ephemeral levels"
+  ]
+}

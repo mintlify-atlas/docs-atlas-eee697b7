@@ -1,0 +1,127 @@
+---
+title: "Persistence: how classicborne stores worlds"
+description: "classicborne persists world state in an append-only VHS binary format with optional SQLite keyframe snapshots for fast level restoration."
+---
+
+classicborne tracks every block placement and command that happens in a level through the `ChangeRecord` system. Rather than serializing the entire block buffer on every change, it appends compact binary actions to a file on disk. On the next server start, that file is replayed in order to reconstruct the level state. For long-lived levels, `KeyframeRecord` can take periodic SQLite snapshots of the full voxel buffer so that restoration starts from a recent checkpoint instead of the very beginning of the record.
+
+## The VHS file format
+
+`ChangeRecord` writes all pending actions to a file named `vhs.bin` inside a per-level directory (for example `./blockRecords/spawn/vhs.bin`). The file is a sequence of framed, zlib-deflated chunks:
+
+```
+[ uint32-LE: deflated length ] [ deflated bytes ]
+[ uint32-LE: deflated length ] [ deflated bytes ]
+...
+```
+
+Each deflated chunk contains one or more serialized actions. There are two action types:
+
+<CardGroup cols={2}>
+  <Card title="Block change (code 0)" icon="square">
+    A 5-byte entry: `0x00` action code followed by `x`, `y`, `z`, and the block ID, each as a single unsigned byte.
+  </Card>
+  <Card title="Command (variable)" icon="terminal">
+    A variable-length entry: the byte count of `actionBytes`, a null-terminated UTF-8 command string, then each action byte in order.
+  </Card>
+</CardGroup>
+
+Actions accumulate in an in-memory `SmartBuffer` (`currentBuffer`). Once `currentActionCount` exceeds 1024, `setBlock` or `commitAction` calls `flushChanges()` automatically.
+
+## Flushing changes to disk
+
+`flushChanges()` drains the in-memory buffer to disk:
+
+```js
+// Called automatically when currentActionCount > 1024.
+// You can also call it manually before shutting down.
+await level.changeRecord.flushChanges()
+```
+
+Internally it:
+1. Marks `draining = true` so concurrent callers do not trigger a second flush.
+2. Resets `currentActionCount` to zero and clears `dirty`.
+3. Deflates the buffer with `zlib.deflate`.
+4. Prepends a `uint32-LE` length prefix and appends the result to `vhs.bin`.
+
+<Note>
+  `BaseLevel.dispose(saveChanges = true)` calls `flushChanges()` automatically before closing file handles, so you do not need to flush manually when unloading a level gracefully.
+</Note>
+
+## Restoring a level from disk
+
+`restoreBlockChangesToLevel(level, maxActions?, staller?)` replays the VHS file against a live `BaseLevel`:
+
+```js
+// This is called automatically by loadIntoUniverse.
+// You can call it manually to replay up to a specific action count.
+const actionsRestored = await changeRecord.restoreBlockChangesToLevel(level, 500)
+```
+
+During restore, `level.loading` is set to `true`, which suppresses change-record writes inside the command interpreter (preventing the replay from recording itself). Block changes call `level.rawSetBlock` directly, and commands are routed through `level.commandInterpreter.interpretCommand` followed by `commitAction`.
+
+## Keyframe snapshots
+
+For levels with many thousands of actions, replaying the entire VHS file from the beginning can be slow. `KeyframeRecord` stores compressed snapshots of the full voxel buffer in a SQLite database (`dvr.db`) alongside the VHS file.
+
+During `restoreBlockChangesToLevel`, if the elapsed wall-clock time since the last keyframe exceeds `ChangeRecord.lagKeyframeTime` (250 ms by default), a new keyframe is written automatically:
+
+```js
+// The threshold that triggers automatic keyframe creation during restore.
+ChangeRecord.lagKeyframeTime // 250 ms
+```
+
+On the next restore, `getLatestKeyframe` returns the most recent keyframe whose `totalActionCount` is at or below the requested maximum. The restore then inflates that keyframe's voxel data directly into `level.blocks` and begins replaying only the actions that follow.
+
+<Tip>
+  `KeyframeRecord` depends on the optional `sqlite3` native module. If it is not installed, `ChangeRecord` logs a warning and falls back to full VHS replay without snapshots.
+</Tip>
+
+### Keyframe database schema
+
+Each row in the `keyframes` table stores:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incremented primary key. |
+| `offset` | INTEGER | Byte offset in `vhs.bin` where replay should resume after this keyframe. |
+| `totalActionCount` | INTEGER | Total actions recorded up to this snapshot. |
+| `bufferActionCount` | INTEGER | Action index within the chunk at `offset`. |
+| `template` | TEXT | Template name plus bounds key (e.g. `"flat64.64.64"`). |
+| `voxelData` | BLOB | zlib-deflated copy of `level.blocks` at snapshot time. |
+| `levelData` | TEXT | JSON metadata reserved for future use (defaults to `"{}"`). |
+
+## Committing (trimming) a record
+
+`commit(toActionCount, level)` rewrites the VHS file, retaining only the first `toActionCount` actions. This is useful after you undo or roll back world state:
+
+```js
+await level.changeRecord.commit(1000, level)
+```
+
+The method replays the original file up to the target action count into a temporary file, then atomically replaces the original. Keyframes beyond `toActionCount` are purged from the SQLite database with `purgeKeyframes`.
+
+<Warning>
+  `commit` closes and reopens file handles. Do not call it while `flushChanges` is running (`draining === true`). It flushes any dirty buffer automatically before starting.
+</Warning>
+
+## NullChangeRecord: ephemeral levels
+
+For levels that should not persist changes — procedurally generated arenas, temporary rooms, or read-only showcases — pass `useNullChangeRecord: true` to `loadIntoUniverse`:
+
+```js
+const arenaLevel = await BaseLevel.loadIntoUniverse(universe, "arena", {
+  useNullChangeRecord: true,
+})
+```
+
+`NullChangeRecord` satisfies the same interface as `ChangeRecord` but every method is a no-op. No files are opened, no buffer is allocated, and `restoreBlockChangesToLevel` returns `0` immediately. This means the level always starts fresh from its template on each load.
+
+```js
+import { NullChangeRecord } from "classicborne/class/level/changeRecord/NullChangeRecord.mjs"
+
+// All of these are safe to call but do nothing:
+await nullRecord.flushChanges()  // returns 0
+await nullRecord.commit()        // returns 0
+await nullRecord.dispose()       // no-op
+```

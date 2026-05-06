@@ -1,0 +1,146 @@
+---
+title: "Players: connecting clients to classicborne"
+description: "BasePlayer represents a connected client in classicborne. It handles authentication, position tracking, messaging, drone sync, and rate-limit enforcement."
+---
+
+`BasePlayer` is the per-connection object that ties a `classicborne-server-protocol` `Client` to the rest of the server. Each time a client completes the WebSocket handshake, the universe instantiates its `playerClass` with that client, the universe reference, and the raw `authInfo` supplied by the protocol. From that point on, `BasePlayer` owns the connection's entire lifecycle — authentication, level membership, position state, chat delivery, and entity replication.
+
+## Constructor and initialization flow
+
+The constructor immediately kicks off `initialize`, which runs asynchronously:
+
+```js
+import { BasePlayer } from "classicborne/class/player/BasePlayer.mjs"
+
+class MyPlayer extends BasePlayer {
+  async checkAuthInfo(client, universe, authInfo) {
+    // Return true to allow, or a string to reject with that reason.
+    const valid = await verifyToken(authInfo.username, authInfo.verificationKey)
+    return valid ? true : "Invalid verification key."
+  }
+
+  async afterAuth() {
+    await super.afterAuth() // sends serverIdentification
+    // Custom post-auth logic: send welcome message, teleport to spawn, etc.
+  }
+}
+```
+
+<Steps>
+  <Step title="checkAuthInfo">
+    Called with the raw `authInfo`. Return `true` to admit the player, or a string to disconnect them with that message. The default implementation always returns `true`.
+  </Step>
+  <Step title="Property setup">
+    After `checkAuthInfo` returns `true`, `position`, `orientation`, `watchdog`, and `droneTransmitter` are initialized.
+  </Step>
+  <Step title="afterAuth">
+    Called immediately after property setup. The base implementation sends the `serverIdentification` packet. Override it to perform post-auth work such as loading player data or teleporting to a spawn level.
+  </Step>
+  <Step title="Event wiring">
+    `listenSetBlock` and `listenPosition` attach listeners to the underlying client. A `close` listener cleans up level membership, the watchdog, and universe registration.
+  </Step>
+  <Step title="addPlayer / teleport">
+    When using `BasePlayer` directly (not a subclass), the player is registered with the universe and teleported to the `"classicborne-default"` level. Subclasses typically override this behaviour inside `afterAuth` or `initialize`.
+  </Step>
+</Steps>
+
+## Position and held block
+
+After `initialize` completes, three properties track the player's in-world state:
+
+- **`position`** — a `Vector3` (`[x, y, z]`) in Minecraft Classic fixed-point units, updated on every position packet.
+- **`orientation`** — a `Vector2` (`[yaw, pitch]`), also updated on every position packet.
+- **`heldBlock`** — the block ID in the player's hand, updated alongside position.
+- **`space`** — the `BaseLevel` the player is currently in, or `null` when between levels.
+
+## Sending messages
+
+Use `message(text, types, continueAdornment)` to send text to the client. The method handles splitting long strings across multiple 64-character packets and preserves color codes across the split boundary:
+
+```js
+player.message("Hello, world!")                              // chat (type 0)
+player.message("Health: 20", BasePlayer.messageTypes.center) // center of screen
+player.message("Score: 42", [
+  BasePlayer.messageTypes.bottomLowestRow,
+  BasePlayer.messageTypes.bottomMiddleRow,
+])
+```
+
+### Message types
+
+`BasePlayer.messageTypes` maps friendly names to the numeric type codes used by the `MessageTypes` extension:
+
+| Name | Code | Position |
+|------|------|----------|
+| `topHighestRow` | 1 | Top of screen, highest row |
+| `topMiddleRow` | 2 | Top of screen, middle row |
+| `topLowestRow` | 3 | Top of screen, lowest row |
+| `bottomHighestRow` | 13 | Bottom of screen, highest row |
+| `bottomMiddleRow` | 12 | Bottom of screen, middle row |
+| `bottomLowestRow` | 11 | Bottom of screen, lowest row |
+| `center` | 100 | Center of screen |
+
+### Print areas and clearing
+
+`BasePlayer.printAreaTypes` groups message types into named regions (`bottom`, `top`, `center`). Call `clearPrints(printTypes)` to blank an entire region:
+
+```js
+// Clear all three bottom rows.
+player.clearPrints(BasePlayer.printAreaTypes.bottom)
+
+// Clear only the top area.
+player.clearPrints(BasePlayer.printAreaTypes.top)
+```
+
+<Tip>
+  Right-aligned message types on mobile ClassiCube clients overlap with on-screen controls. `message()` automatically pads right-aligned messages to push them left when `isClassiCubeMobile()` returns `true`.
+</Tip>
+
+## Block placement events
+
+`listenSetBlock` attaches to the client's `setBlock` event. Before forwarding the placement to the level, it:
+
+1. Calls `watchdog.rateOperation()` — disconnects the player if the rate limit is exceeded.
+2. Checks that `player.space` is set (the player is in a level).
+3. Validates that the target position is within bounds.
+4. Calls `level.userHasPermission(username)` to enforce the allowList.
+
+If all checks pass, `level.setBlock` is called with the placing player excluded from the rebroadcast (they already see their own change locally).
+
+## Rate limiting with Watchdog
+
+Every `BasePlayer` owns a `Watchdog` instance that enforces a per-second operation budget. The limit is 382 operations per second. Exceeding it disconnects the player with the message `"Sanctioned: Watchdog triggered"`:
+
+```js
+// Watchdog internals — you do not call these directly.
+// watchdog.rateOperation() is called inside listenSetBlock.
+watchdog.currentRate  // operations counted this second
+watchdog.limit        // 382
+```
+
+The watchdog resets `currentRate` to zero every second via `setInterval`. Call `watchdog.destroy()` to clear the interval — this is done automatically in the `close` handler.
+
+## Entity synchronization with DroneTransmitter
+
+A `DroneTransmitter` is created for each player after authentication. It maintains the mapping of `Drone` objects to client-visible entity IDs and keeps entity positions in sync.
+
+When a player enters a level, `BaseLevel.addPlayer` creates a `Drone` backed by an `Ego` named after the player, adds it to the level's drone set, and calls `droneTransmitter.addDrone` for every other player so the new player's character appears to them. `sendDrones` sends pre-existing drones in the level to the joining player.
+
+```js
+import { Drone } from "classicborne/class/level/drone/Drone.mjs"
+import { Ego } from "classicborne/class/level/drone/Ego.mjs"
+
+// Adding a custom NPC drone to a level:
+const npcEgo = new Ego({ name: "Guide" }).setSkin("GuideBot").setScale([1, 1, 1])
+const npc = new Drone(npcEgo)
+level.addDrone(npc)
+
+// Moving the NPC — all players in the level receive the update automatically:
+npc.setPosition({ x: 32, y: 8, z: 32 }, { yaw: 128, pitch: 0 })
+```
+
+`DroneTransmitter` requires the `ExtendedPlayerList` and `EntityProperty` protocol extensions. It throws during construction if either is absent.
+
+## Mobile client detection
+
+`isClassiCubeMobile()` returns `true` when `client.appName` starts with `"ClassiCube"` and ends with one of `"android alpha"`, `"iOS alpha"`, or `"web mobile"`. Use this to adapt UI layout sent to mobile players.

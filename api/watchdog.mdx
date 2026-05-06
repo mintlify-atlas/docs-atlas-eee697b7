@@ -1,0 +1,86 @@
+---
+title: "Watchdog API reference"
+description: "Watchdog monitors a player's block operation rate and disconnects them automatically if they exceed the configured limit, protecting the server from abuse."
+---
+
+`Watchdog` tracks how many block operations a player performs per second. Each time a block operation is processed, you call `rateOperation` to increment the counter. If the counter exceeds `limit` within the current one-second window, `Watchdog` disconnects the player with the message `"Sanctioned: Watchdog triggered"` and returns `true`.
+
+`Watchdog` is instantiated automatically by `BasePlayer.initialize()`. You do not need to create or manage it directly in most cases.
+
+<Note>
+  To raise or lower the rate limit, subclass `BasePlayer` and adjust `this.watchdog.limit` in your overridden `initialize` method after calling `super.initialize`.
+
+  ```js
+  class MyPlayer extends BasePlayer {
+    async initialize(client, universe, authInfo) {
+      const result = await super.initialize(client, universe, authInfo)
+      if (result && this.watchdog) {
+        this.watchdog.limit = 600
+      }
+      return result
+    }
+  }
+  ```
+</Note>
+
+## Constructor
+
+```js
+new Watchdog(player)
+```
+
+Starts a one-second interval that resets `currentRate` to `0`. Sets `currentRate = 0` and `limit = 382`.
+
+<ParamField path="player" type="BasePlayer" required>
+  The [`BasePlayer`](/api/base-player) instance this watchdog monitors. Stored as `this.player` and used to disconnect the client when the limit is exceeded.
+</ParamField>
+
+## Instance properties
+
+<ParamField path="player" type="BasePlayer">
+  The player being monitored by this watchdog instance.
+</ParamField>
+
+<ParamField path="currentRate" type="number">
+  The number of block operations counted in the current one-second window. Resets to `0` every second via the internal interval. Starts at `0`.
+</ParamField>
+
+<ParamField path="limit" type="number" default="382">
+  The maximum number of block operations allowed per second before the player is disconnected. Defaults to `382`.
+</ParamField>
+
+<ParamField path="interval" type="NodeJS.Timeout">
+  The handle returned by `setInterval`. Used internally by `destroy` to stop the reset loop.
+</ParamField>
+
+## Instance methods
+
+### `rateOperation(amount?)`
+
+Increments `currentRate` by `amount`. If `currentRate` exceeds `limit` after the increment, disconnects the player with `"Sanctioned: Watchdog triggered"` and returns `true`. Otherwise returns `false`.
+
+<ParamField path="amount" type="number" default="1">
+  The number of operations to add to `currentRate`. Defaults to `1`.
+</ParamField>
+
+**Returns:** `boolean` — `true` if the player was disconnected, `false` otherwise.
+
+```js
+// In a custom block handler — stop processing if watchdog triggered
+if (player.watchdog.rateOperation()) return
+
+// Count a bulk operation as multiple units
+if (player.watchdog.rateOperation(5)) return
+```
+
+---
+
+### `destroy()`
+
+Clears the internal interval, stopping the rate-reset loop. Call this when the player disconnects to avoid resource leaks. `BasePlayer` calls `destroy` automatically in its `close` event handler.
+
+**Returns:** `void`
+
+```js
+player.watchdog.destroy()
+```

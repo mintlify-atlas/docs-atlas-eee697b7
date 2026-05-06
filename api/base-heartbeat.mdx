@@ -1,0 +1,112 @@
+---
+title: 'BaseHeartbeat API reference'
+description: 'Complete API reference for BaseHeartbeat, which posts periodic heartbeats to the ClassiCube server list to keep your server publicly visible.'
+---
+
+`BaseHeartbeat` keeps a classicborne server visible on the ClassiCube server list by POSTing status data at regular intervals. `BaseUniverse` loads and instantiates this class automatically when `postToMainServer: true` is set in the server configuration — you rarely need to construct it yourself. Extend `BaseHeartbeat` and assign your subclass to `MyUniverse.heartbeatClass` to customise heartbeat behaviour.
+
+## Constructor
+
+`new BaseHeartbeat(urlBase, universe)`
+
+Creates a heartbeat instance and immediately calls `start()` to begin the heartbeat loop. `BaseUniverse` passes `https://www.classicube.net/server/heartbeat/` as `urlBase` by default.
+
+<ParamField body="urlBase" type="string" required>
+  The server list endpoint to POST heartbeats to.
+</ParamField>
+
+<ParamField body="universe" type="BaseUniverse" required>
+  The `BaseUniverse` instance whose state (player count, port, server name) is reported in each heartbeat.
+</ParamField>
+
+<Note>
+  You typically do not call this constructor directly. Set `postToMainServer: true` in your `BaseUniverse` configuration instead, and optionally set a custom `heartbeatClass` static property on your universe subclass.
+</Note>
+
+## Instance properties
+
+<ResponseField name="universe" type="BaseUniverse">
+  The `BaseUniverse` instance this heartbeat is reporting for. Used to read player count, port, and server name on each POST.
+</ResponseField>
+
+<ResponseField name="salt" type="string">
+  A 192-byte random value encoded as a base64url string, generated at construction time. Sent with every heartbeat so the ClassiCube server can verify player authentication tokens.
+</ResponseField>
+
+<ResponseField name="urlBase" type="string">
+  The server list URL that heartbeats are POSTed to.
+</ResponseField>
+
+<ResponseField name="pinged" type="boolean">
+  Starts as `false`. Set to `true` after the first successful heartbeat POST. The server list URL returned by the first response is logged to the console.
+</ResponseField>
+
+<ResponseField name="alive" type="boolean">
+  Controls the heartbeat loop. Starts as `true`. Set this to `false` to stop the loop and take the server off the public list.
+
+  ```javascript
+  universe.heartbeat.alive = false // stop announcing the server
+  ```
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="start()" type="Promise<void>">
+  Runs the heartbeat loop. Called automatically by the constructor — you do not need to call this yourself. On each iteration, it calls `postHeartbeat` with the current server state, then waits for `heartbeatRate` milliseconds before repeating. If a POST fails, it logs the error and retries after `retryRate` milliseconds.
+</ResponseField>
+
+<ResponseField name="postHeartbeat(form)" type="Promise<void>">
+  POSTs the provided form data to `urlBase` as `application/x-www-form-urlencoded`. On the first successful response, logs the response body (which contains the server list URL) and sets `pinged` to `true`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `form` | `Record<string, string>` | Key-value pairs sent as form fields. |
+</ResponseField>
+
+## Static properties
+
+<ResponseField name="heartbeatRate" type="number" default="45000">
+  Milliseconds between successful heartbeats. Defaults to `45000` (45 seconds).
+</ResponseField>
+
+<ResponseField name="retryRate" type="number" default="1000">
+  Milliseconds to wait before retrying after a failed heartbeat. Defaults to `1000` (1 second). The short retry interval helps reclaim a server list slot quickly if the server list or its CDN has a brief outage.
+</ResponseField>
+
+## Form fields
+
+Each heartbeat POST includes the following fields.
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `name` | `serverConfiguration.serverName` or `"A classicborne server."` | Server name shown on the listing. |
+| `port` | `serverConfiguration.port` (as string) | Public TCP port. |
+| `users` | Current player count (as string) | Number of connected players. |
+| `max` | `"64"` | Maximum player capacity. |
+| `software` | `"BunnyNabbit/classicborne"` | Software identifier. |
+| `public` | `"true"` | Marks the server as publicly listed. |
+| `web` | `"true"` | Indicates WebSocket support. |
+| `salt` | `this.salt` | Auth verification salt. |
+
+## Customising heartbeat behaviour
+
+To change the heartbeat rate or POST logic, extend `BaseHeartbeat` and assign your subclass to a static property on your universe:
+
+```javascript
+import { BaseHeartbeat } from "classicborne/class/server/BaseHeartbeat.mjs"
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+class MyHeartbeat extends BaseHeartbeat {
+  static heartbeatRate = 30000 // post every 30 seconds
+}
+
+class MyUniverse extends BaseUniverse {
+  static heartbeatClass = Promise.resolve(MyHeartbeat)
+}
+
+const universe = new MyUniverse({
+  port: 25565,
+  postToMainServer: true,
+  serverName: "My classicborne server",
+})
+```

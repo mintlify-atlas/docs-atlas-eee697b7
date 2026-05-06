@@ -1,0 +1,131 @@
+---
+title: 'DroneTransmitter API reference'
+description: 'Complete API reference for DroneTransmitter, the class that subscribes to Drone events and sends entity spawn, position, and despawn packets to a client.'
+---
+
+`DroneTransmitter` replicates `Drone` instances and their positions to a single player's client. When you add a drone, `DroneTransmitter` assigns it a client-specific net ID, spawns the entity on the client using the `ExtendedPlayerList` extension, and subscribes to the drone's `position` and `destroy` events to keep the client in sync automatically. `DroneTransmitter` extends `EventEmitter`.
+
+<Warning>
+  The client passed to the constructor must have the `ExtendedPlayerList` and `EntityProperty` protocol extensions. The constructor throws immediately if either extension is missing.
+</Warning>
+
+## Constructor
+
+`new DroneTransmitter(client)`
+
+Creates a transmitter for the given client and validates that the required protocol extensions are present.
+
+<ParamField body="client" type="Client" required>
+  The `classicborne-server-protocol` `Client` instance that receives entity packets. Stored as `this.client`.
+</ParamField>
+
+```js
+import { DroneTransmitter } from "classicborne/class/level/drone/DroneTransmitter.mjs"
+
+const transmitter = new DroneTransmitter(client)
+```
+
+## Instance properties
+
+<ResponseField name="client" type="Client">
+  The client instance passed to the constructor. Used internally to send all protocol messages.
+</ResponseField>
+
+<ResponseField name="drones" type="Set<Drone>">
+  The set of all drones currently tracked by this transmitter.
+</ResponseField>
+
+<ResponseField name="netIds" type="Map<Drone, number>">
+  Maps each tracked `Drone` to its client-specific net ID (0–126).
+</ResponseField>
+
+<ResponseField name="listeners" type="Map<Drone, object>">
+  Stores the bound `position` and `destroy` event handlers for each drone so they can be removed cleanly by `removeDrone`.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="addDrone(drone)" type="number">
+  Adds a drone to the transmitter. Finds the lowest available net ID (0–126), assigns it to the drone, subscribes to its `position` and `destroy` events, calls `configureDrone` to spawn the entity on the client, and returns the assigned net ID. `BaseLevel` calls this when a player enters a level.
+
+  Throws a string `"Unable to generate drone ID"` if all 127 net IDs are in use.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `drone` | `Drone` | The drone to add. |
+
+  ```js
+  const netId = transmitter.addDrone(drone)
+  console.log(`Drone spawned with net ID ${netId}`)
+  ```
+</ResponseField>
+
+<ResponseField name="removeDrone(drone)" type="void">
+  Removes a drone from the transmitter. Sends a despawn packet to the client, frees the net ID, unsubscribes the stored event listeners, and removes the drone from `this.drones`. Called automatically when the drone emits `destroy`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `drone` | `Drone` | The drone to remove. |
+
+  ```js
+  transmitter.removeDrone(drone)
+  ```
+</ResponseField>
+
+<ResponseField name="clearDrones()" type="void">
+  Removes all currently tracked drones by calling `removeDrone` on each one. `BaseLevel` uses this to clean up when a player leaves a level.
+
+  ```js
+  transmitter.clearDrones()
+  ```
+</ResponseField>
+
+<ResponseField name="resendDrones()" type="void">
+  Calls `configureDrone` for every tracked drone, re-sending each entity's spawn packet to the client. Use this after a level transition or reconnect to restore entity state.
+
+  ```js
+  transmitter.resendDrones()
+  ```
+</ResponseField>
+
+<ResponseField name="updateDrone(drone)" type="void">
+  Sends an absolute position update packet to the client for the given drone using its current `position` and `orientation`. Called automatically whenever a tracked drone emits the `position` event.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `drone` | `Drone` | The drone whose position to send. |
+</ResponseField>
+
+<ResponseField name="configureDrone(drone)" type="void">
+  Spawns or re-spawns the drone on the client by sending a `configureSpawn` packet via `ExtendedPlayerList` and three `setEntityProperty` packets via `EntityProperty` (X, Y, and Z scale). Called by `addDrone` and `resendDrones`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `drone` | `Drone` | The drone to configure on the client. |
+</ResponseField>
+
+<ResponseField name="getDroneByNetId(netId)" type="Drone | null">
+  Returns the drone assigned to the given net ID, or `null` if no drone with that ID is tracked.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `netId` | `number` | The client-specific net ID to look up. |
+
+  ```js
+  const drone = transmitter.getDroneByNetId(3)
+  ```
+</ResponseField>
+
+## Static methods
+
+<ResponseField name="DroneTransmitter.validateClientExtensions(client)" type="void">
+  Checks that `client.extensions` contains both `ExtendedPlayerList` and `EntityProperty`. Throws an `Error` naming the first missing extension if either is absent. The constructor calls this automatically.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `client` | `Client` | The client to validate. |
+
+  ```js
+  DroneTransmitter.validateClientExtensions(client)
+  ```
+</ResponseField>

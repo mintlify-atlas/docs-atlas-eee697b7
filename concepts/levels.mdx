@@ -1,0 +1,149 @@
+---
+title: "Levels: managing worlds in classicborne"
+description: "BaseLevel represents a world in classicborne. It owns the block buffer, tracks players and drones, interprets commands, and persists changes to disk."
+---
+
+A `BaseLevel` is the runtime representation of a Minecraft Classic world. It holds a flat `Buffer` of block IDs, a list of connected players, a set of drone entities, a command interpreter, and a `ChangeRecord` that persists every block placement and command to disk. You almost always extend `BaseLevel` rather than using it directly.
+
+## Block storage
+
+The constructor takes two positional arguments:
+
+- **`bounds`** — a `Vector3` (`[x, y, z]`) describing the level dimensions. The static default is `[64, 64, 64]`.
+- **`blocks`** — a `Buffer` whose length equals `bounds[0] * bounds[1] * bounds[2]`. Each byte is a block ID.
+
+Block coordinates map to buffer offsets using the formula `x + sizeX * (z + sizeZ * y)`:
+
+```js
+// Reading a block manually:
+const offset = x + bounds[0] * (z + bounds[2] * y)
+const blockId = level.blocks.readUInt8(offset)
+```
+
+classicborne exposes three helper methods so you never need to compute this offset yourself:
+
+| Method | Description |
+|--------|-------------|
+| `getBlock(position)` | Returns the block ID at `[x, y, z]`. |
+| `setBlock(position, block, excludePlayers, saveToRecord)` | Writes the block, notifies players, and optionally appends to the change record. |
+| `rawSetBlock(position, block)` | Writes the block without notifying any players. Used during level restore. |
+
+`withinLevelBounds(position)` returns `false` if any coordinate is `NaN`, negative, or outside the bounds — useful for validating client-supplied positions before writing.
+
+## Build permissions
+
+`allowList` is a `string[]` of usernames who may place blocks. `userHasPermission(username)` returns `true` when the list is empty (open build) or when the username is present:
+
+```js
+level.allowList = ["Alice", "Bob"]
+level.userHasPermission("Alice") // true
+level.userHasPermission("Charlie") // false
+level.userHasPermission("anyone") // false — list is non-empty
+```
+
+## Static configuration properties
+
+Subclasses use static properties to declare their default shape and behaviour. `loadIntoUniverse` reads these properties when creating a level instance, but the caller can override any of them via the `defaults` argument.
+
+<CardGroup cols={2}>
+  <Card title="bounds" icon="cube">
+    Default `Vector3` dimensions. Overridden per-load via `defaults.bounds`.
+  </Card>
+  <Card title="template" icon="layer-group">
+    A `BaseTemplate` instance whose `generate(bounds)` method returns the initial block `Buffer`. Defaults to `EmptyTemplate`.
+  </Card>
+  <Card title="blockset" icon="palette">
+    A `number[][]` of custom block definitions sent to clients via `BlockDefinitions`. Defaults to `[]`.
+  </Card>
+  <Card title="environment" icon="sun">
+    An object of `LevelEnvironment` properties (`sidesId`, `edgeId`, `edgeHeight`, `cloudsHeight`, etc.) sent to clients on join.
+  </Card>
+  <Card title="commands" icon="terminal">
+    An array of level command classes available for `BaseLevelCommandInterpreter` to dispatch.
+  </Card>
+  <Card title="commandInterpreterClass" icon="code">
+    The interpreter class instantiated in the constructor. Defaults to `BaseLevelCommandInterpreter`.
+  </Card>
+</CardGroup>
+
+## Loading a level into the universe
+
+`BaseLevel.loadIntoUniverse(universe, spaceName, defaults)` is the canonical way to create and register a level. It is idempotent — if the universe already has an entry for `spaceName` it returns the cached value immediately:
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+const level = await BaseLevel.loadIntoUniverse(universe, "spawn", {
+  bounds: [128, 64, 128],
+  allowList: ["Alice"],
+  useNullChangeRecord: false, // persist changes to disk (the default)
+})
+```
+
+Pass `useNullChangeRecord: true` in `defaults` to use a `NullChangeRecord` instead, which discards all changes and is appropriate for temporary or procedurally regenerated levels.
+
+<Note>
+  `loadIntoUniverse` stores the unresolved `Promise` in `universe.levels` immediately so that concurrent calls for the same `spaceName` all receive the same promise rather than creating duplicate instances.
+</Note>
+
+## Teleporting players
+
+Subclasses override `teleportPlayer` to provide level-specific spawn coordinates. The documented pattern is:
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+import { SpawnLevel } from "./SpawnLevel.mjs"
+
+class SpawnLevel extends BaseLevel {
+  static async teleportPlayer(player, spaceName) {
+    if (super.teleportPlayer(player) === false) return
+    SpawnLevel.loadIntoUniverse(player.universe, spaceName, {
+      levelClass: SpawnLevel,
+    }).then(async (level) => {
+      level.addPlayer(player, [32, 8, 32], [0, 0])
+    })
+  }
+}
+```
+
+Calling `super.teleportPlayer(player)` removes the player from their current level and sets `player.teleporting = true`. If `teleporting` is already `true` (the player is mid-transition), `super.teleportPlayer` returns `false` and the override returns early to avoid a double-teleport.
+
+## Level templates
+
+`BaseTemplate` is an abstract base class with a single `generate(bounds)` method that must return a `Buffer`:
+
+```js
+import { BaseTemplate } from "classicborne/class/level/BaseTemplate.mjs"
+
+class FlatTemplate extends BaseTemplate {
+  constructor() {
+    super("flat", [128, 64, 128])
+  }
+
+  generate(bounds = this.defaultBounds) {
+    const buf = Buffer.alloc(bounds[0] * bounds[1] * bounds[2])
+    // Fill the bottom half with stone (block ID 1).
+    for (let y = 0; y < bounds[1] / 2; y++) {
+      for (let z = 0; z < bounds[2]; z++) {
+        for (let x = 0; x < bounds[0]; x++) {
+          buf[x + bounds[0] * (z + bounds[2] * y)] = 1
+        }
+      }
+    }
+    return buf
+  }
+}
+```
+
+`EmptyTemplate` (the default) simply returns `Buffer.alloc(x * y * z)`, producing an all-air level.
+
+## Disposing a level
+
+Call `dispose(saveChanges)` when you want to unload a level and free its resources. With `saveChanges` set to `true` (the default), any dirty buffered changes are flushed to disk before the file handle is closed:
+
+```js
+await level.dispose() // flushes and closes ChangeRecord, emits "unloaded"
+universe.levels.delete("spawn")
+```
+
+`dispose` also calls `commandInterpreter.dispose()`, which removes all event listeners on the interpreter.

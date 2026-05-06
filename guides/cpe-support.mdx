@@ -1,0 +1,178 @@
+---
+title: "Classic Protocol Extension support in classicborne"
+description: "classicborne registers and uses CPE extensions automatically. Learn which extensions are active and how to access them from player and level code."
+---
+
+The Classic Protocol Extension (CPE) is a set of optional enhancements to the Minecraft Classic protocol that clients and servers negotiate at connection time. classicborne registers several CPE extensions automatically and uses them internally to handle custom blocks, player lists, environment settings, and more. You can access any negotiated extension through `player.client.extensions.get("ExtensionName")` to call its methods directly from your own code.
+
+## How CPE extensions work
+
+When a client connects, classicborne's underlying `classicborne-server-protocol` layer exchanges extension lists with the client. Only extensions that both sides support are active for that connection. You access an extension's API through the extensions map on the client object:
+
+```js
+const ext = player.client.extensions.get("ExtensionName")
+ext.someMethod()
+```
+
+If a client does not support a particular extension, `extensions.get()` returns `undefined`, so guard calls with `extensions.has()` where the extension is optional.
+
+## Extensions used by classicborne
+
+### ExtendedPlayerList
+
+classicborne uses `ExtendedPlayerList` to manage the player tab-list displayed in CPE-capable clients. It's called in `BaseUniverse.addPlayer()` and `BaseUniverse.removePlayer()` to keep every connected player's list up to date whenever someone joins or leaves.
+
+`addPlayerName` adds an entry to the list, and `removePlayerName` removes one:
+
+```js
+// From BaseUniverse — called internally when a player joins
+player.client.extensions.get("ExtendedPlayerList").addPlayerName(
+  player.netId,
+  player.username,
+  player.getDisplayName(),
+  "Server",
+  1
+)
+```
+
+`getDisplayName()` on `BasePlayer` returns the username prefixed with a color code (default `"&7"`) and truncated to 64 characters.
+
+### CustomBlocks
+
+`CustomBlocks` allows clients to render block IDs beyond the standard 49. classicborne calls `sendSupportLevel(1)` immediately after authentication if the client supports this extension:
+
+```js
+// From BasePlayer.initialize()
+if (this.client.extensions.has("CustomBlocks")) {
+  this.client.extensions.get("CustomBlocks").sendSupportLevel(1)
+}
+```
+
+### BlockDefinitions and BlockDefinitionsExtended
+
+These extensions define the visual appearance of custom block IDs. `BaseLevel.sendBlockset()` calls `defineBlock()` on both extensions for each entry in a level's `blockset` array:
+
+```js
+// From BaseLevel.sendBlockset() — called during loadPlayer
+client.extensions.get("BlockDefinitions").defineBlock(block)
+client.extensions.get("BlockDefinitionsExtended").defineBlock(block)
+```
+
+Each entry in `blockset` is an array of `[r, g, b, draw]` values. classicborne derives fog color, textures, and walk sound from these values automatically.
+
+### BlockPermissions
+
+`BlockPermissions` controls which block IDs players can place or delete. classicborne calls `setBlockPermission` for block IDs 7–11 (still water, flowing water, still lava, flowing lava, and obsidian) during `loadPlayer` to allow clients to interact with liquid blocks:
+
+```js
+// From BaseLevel.loadPlayer()
+player.client.extensions.get("BlockPermissions").setBlockPermission(7, 1, 1)
+player.client.extensions.get("BlockPermissions").setBlockPermission(8, 1, 1)
+player.client.extensions.get("BlockPermissions").setBlockPermission(9, 1, 1)
+player.client.extensions.get("BlockPermissions").setBlockPermission(10, 1, 1)
+player.client.extensions.get("BlockPermissions").setBlockPermission(11, 1, 1)
+```
+
+### LevelEnvironment
+
+`LevelEnvironment` sends environment properties and texture pack URLs to clients when they load a level. classicborne calls this in `loadPlayer` if the level has an `environment` object or a `texturePackUrl` set:
+
+```js
+// From BaseLevel.loadPlayer()
+if (this.environment) {
+  player.client.extensions.get("LevelEnvironment").setEnvironmentProperties(this.environment)
+}
+if (this.texturePackUrl) {
+  player.client.extensions.get("LevelEnvironment").texturePackUrl(this.texturePackUrl)
+}
+```
+
+The default `environment` on `BaseLevel` sets the following properties:
+
+```js
+static environment = {
+  sidesId: 7,       // block ID used for the level sides (bedrock)
+  edgeId: 250,      // block ID used for the water surface
+  edgeHeight: 0,    // height of the water edge
+  cloudsHeight: 256,
+}
+```
+
+You can set `texturePackUrl` either in `serverConfiguration` (applied as a fallback for all levels) or per-level in the `defaults` object passed to `loadIntoUniverse`:
+
+```js
+new MyUniverse({
+  port: 25565,
+  postToMainServer: false,
+  texturePackUrl: "https://example.com/textures.zip",
+})
+```
+
+### SetHotbar
+
+`SetHotbar` lets the server pre-populate a player's hotbar with specific block IDs. `BasePlayer.sendHotbar(player)` iterates over `BasePlayer.defaultHotbar` and calls `setHotbar` for each slot:
+
+```js
+// From BasePlayer
+static sendHotbar(player) {
+  this.defaultHotbar.forEach((blockId, index) => {
+    player.client.extensions.get("SetHotbar").setHotbar(blockId, index)
+  })
+}
+
+static defaultHotbar = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+```
+
+Override `defaultHotbar` on your player subclass to change the default hotbar, or call `setHotbar` directly for per-player customization.
+
+### MessageTypes
+
+`MessageTypes` is registered in the `BaseUniverse` constructor so that classicborne can display text in multiple screen regions:
+
+```js
+// From BaseUniverse constructor
+this.server.extensions.push({
+  name: "MessageTypes",
+  version: 1,
+})
+```
+
+`BasePlayer` exposes a `messageTypes` static object that maps region names to the corresponding message type IDs used by the CPE extension:
+
+```js
+BasePlayer.messageTypes = {
+  bottomLowestRow: 11,
+  bottomMiddleRow: 12,
+  bottomHighestRow: 13,
+  topLowestRow: 3,
+  topMiddleRow: 2,
+  topHighestRow: 1,
+  center: 100,
+}
+```
+
+Pass a type ID (or an array of type IDs) to `player.message()` to display text in a specific region:
+
+```js
+player.message("Hello from the top!", BasePlayer.messageTypes.topHighestRow)
+player.message("And the bottom too.", [
+  BasePlayer.messageTypes.bottomLowestRow,
+  BasePlayer.messageTypes.bottomMiddleRow,
+])
+```
+
+`player.clearPrints(printTypes)` clears a set of regions by sending a blank message to each one. It defaults to `BasePlayer.printAreaTypes.bottom`.
+
+## Accessing extensions in your own code
+
+Any CPE extension that the client negotiated is available through `player.client.extensions.get()`. The safest pattern is to check for support before calling:
+
+```js
+this.on("playerAdded", (player) => {
+  if (player.client.extensions.has("SetHotbar")) {
+    player.client.extensions.get("SetHotbar").setHotbar(50, 0)
+  }
+})
+```
+
+Extensions that classicborne registers unconditionally (like `MessageTypes`) are always present in the server's extension list, but a given client may not support them. Always treat extension availability as optional unless you know your target client supports it.

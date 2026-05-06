@@ -1,0 +1,136 @@
+---
+title: "Universe: the classicborne server container"
+description: "BaseUniverse is the top-level classicborne object. It manages the WebSocket server, connected players, loaded levels, and the optional ClassiCube heartbeat."
+---
+
+`BaseUniverse` is the entry point for any classicborne server. It wraps a `classicborne-server-protocol` `Server` instance, owns the `Map` of loaded levels, maintains the list of connected players, and — when configured — sends periodic heartbeats to the ClassiCube server list. Every piece of your server's runtime state flows through the universe.
+
+## Server configuration
+
+Pass a plain object to the `BaseUniverse` constructor. The following properties are read at startup:
+
+<AccordionGroup>
+  <Accordion title="port">
+    The TCP port the WebSocket server listens on.
+
+    ```js
+    const universe = new MyUniverse({ port: 25565 })
+    ```
+  </Accordion>
+  <Accordion title="postToMainServer">
+    Set to `true` to register the server with the ClassiCube server list. When enabled, the universe asynchronously instantiates `heartbeatClass` and begins sending heartbeats every 45 seconds.
+
+    ```js
+    const universe = new MyUniverse({
+      port: 25565,
+      postToMainServer: true,
+      serverName: "My classicborne Server",
+    })
+    ```
+  </Accordion>
+  <Accordion title="serverName">
+    The display name sent to the ClassiCube server list heartbeat endpoint. Defaults to `"A classicborne server."` when omitted.
+  </Accordion>
+  <Accordion title="texturePackUrl">
+    A URL passed through to each level loaded by `BaseLevel.loadIntoUniverse`. Levels forward it to the client via the `LevelEnvironment` extension.
+  </Accordion>
+</AccordionGroup>
+
+## Levels map
+
+`universe.levels` is a `Map<string, BaseLevel>` keyed by the level's name. You do not insert into this map directly — use `BaseLevel.loadIntoUniverse` or `BaseLevel.teleportPlayer` instead. Both methods write to the map and return a `Promise<BaseLevel>` that resolves once the level has finished loading its change record from disk.
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+const level = await BaseLevel.loadIntoUniverse(universe, "spawn", {})
+console.log(universe.levels.get("spawn") === level) // true (after resolution)
+```
+
+<Note>
+  `universe.levels` may hold a `Promise<BaseLevel>` rather than a resolved `BaseLevel` while a level is still initializing. Always `await` the value returned by `loadIntoUniverse` or `teleportPlayer` before calling methods on the level.
+</Note>
+
+## Player lifecycle
+
+`BaseUniverse` manages a flat array of connected players on the underlying `server.players`. Two public methods handle registration and teardown:
+
+<CardGroup cols={2}>
+  <Card title="addPlayer(player)" icon="user-plus">
+    Assigns a unique network ID (0–126) to the player, broadcasts the new player-list entry to all existing clients, and emits the `playerAdded` event. Throws if no ID is available.
+  </Card>
+  <Card title="removePlayer(player)" icon="user-minus">
+    Removes the player from `server.players`, tells every other client to drop the player-list entry, and emits the `playerRemoved` event.
+  </Card>
+</CardGroup>
+
+You can react to these events on any universe instance:
+
+```js
+universe.on("playerAdded", (player) => {
+  console.log(`${player.username} connected`)
+})
+
+universe.on("playerRemoved", (player) => {
+  console.log(`${player.username} disconnected`)
+})
+```
+
+`clientConnected` on the underlying server triggers `new this.constructor.playerClass(client, this, authInfo)`, so you never call `addPlayer` yourself — `BasePlayer.initialize` calls it after authentication succeeds.
+
+## Customizing the player class
+
+Override the `playerClass` static property to substitute your own player implementation. Every client that connects will be instantiated as that class.
+
+```js
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+import { MyPlayer } from "./MyPlayer.mjs"
+
+class MyUniverse extends BaseUniverse {
+  static playerClass = MyPlayer
+}
+
+const universe = new MyUniverse({ port: 25565 })
+```
+
+## ClassiCube heartbeat
+
+When `postToMainServer` is `true`, the universe dynamically imports `BaseHeartbeat` (stored in the `heartbeatClass` static promise) and constructs a heartbeat instance pointed at `https://www.classicube.net/server/heartbeat/`. The heartbeat sends the server name, current player count, port, and a salt used to verify player authentication.
+
+```js
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+import { MyHeartbeat } from "./MyHeartbeat.mjs"
+
+class MyUniverse extends BaseUniverse {
+  // Replace the heartbeat with a custom subclass.
+  static heartbeatClass = Promise.resolve(MyHeartbeat)
+}
+```
+
+`BaseHeartbeat` retries on failure after 1 second (`retryRate`) and resumes the normal 45-second cadence (`heartbeatRate`) once the endpoint responds successfully.
+
+## Subclassing BaseUniverse
+
+A minimal custom universe only needs to set `playerClass`. More involved subclasses can add startup logic in the constructor after calling `super`:
+
+```js
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+import { MyPlayer } from "./MyPlayer.mjs"
+import { SpawnLevel } from "./SpawnLevel.mjs"
+
+class MyUniverse extends BaseUniverse {
+  static playerClass = MyPlayer
+
+  constructor(config) {
+    super(config)
+    // Pre-load the spawn level so it's ready before the first player joins.
+    SpawnLevel.loadIntoUniverse(this, "spawn", {})
+  }
+}
+
+export const universe = new MyUniverse({
+  port: 25565,
+  postToMainServer: true,
+  serverName: "My Server",
+})
+```

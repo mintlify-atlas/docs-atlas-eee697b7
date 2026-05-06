@@ -1,0 +1,147 @@
+---
+title: "Manage levels in your classicborne server"
+description: "Load, cache, and dispose levels with loadIntoUniverse, move players between worlds with teleportPlayer, and keep changes durable with periodic flushing."
+---
+
+classicborne uses a lazy-loading model for levels: a level is created the first time it is requested and then cached in the universe's `levels` map for the lifetime of the server. You interact with levels primarily through the static `loadIntoUniverse` and `teleportPlayer` methods on `BaseLevel` (or your subclass), and you move players between them by calling `removePlayer` and `addPlayer` on the level instances directly.
+
+## Loading a level with `loadIntoUniverse`
+
+`BaseLevel.loadIntoUniverse(universe, spaceName, defaults)` is the standard way to create or retrieve a level. It returns a `Promise<BaseLevel>` that resolves once the level is fully loaded and its change record has been restored.
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+const level = await BaseLevel.loadIntoUniverse(universe, "lobby", {
+  bounds: [128, 64, 128],
+})
+```
+
+If a level with the same `spaceName` already exists in `universe.levels`, the cached promise is returned immediately without creating a new level. Calling `loadIntoUniverse` twice with the same name is safe — both callers receive the same promise.
+
+```js
+const a = BaseLevel.loadIntoUniverse(universe, "lobby", {})
+const b = BaseLevel.loadIntoUniverse(universe, "lobby", {})
+// a === b — same promise, same level
+```
+
+<Note>
+The `defaults` object is only read the first time a level is created. If the level is already cached, the `defaults` you pass are ignored.
+</Note>
+
+## The `defaults` object
+
+The second argument to `loadIntoUniverse` controls how the level is constructed. All properties are optional and fall back to static defaults on the level class.
+
+| Property | Description |
+|---|---|
+| `bounds` | `[x, y, z]` dimensions of the level. Falls back to `BaseLevel.bounds` (`[64, 64, 64]`). |
+| `template` | A `BaseTemplate` instance used to generate the initial block buffer. Falls back to `BaseLevel.template` (an `EmptyTemplate`). |
+| `levelClass` | The constructor to use when creating the level. Falls back to the class `loadIntoUniverse` is called on. |
+| `blockset` | An array of block color/draw data sent to clients. Falls back to `BaseLevel.blockset`. |
+| `environment` | Environment properties (`sidesId`, `edgeId`, `edgeHeight`, `cloudsHeight`) applied via the `LevelEnvironment` CPE extension. |
+| `texturePackUrl` | URL of a texture pack to send to clients. Falls back to `universe.serverConfiguration.texturePackUrl`. |
+| `allowList` | Array of usernames allowed to build. An empty array allows everyone. |
+| `useNullChangeRecord` | Set to `true` to use `NullChangeRecord` instead of `ChangeRecord`. No changes are persisted. |
+| `arguments` | Extra constructor arguments spread after `bounds` and `blocks` when instantiating the level. |
+
+```js
+const level = await MyLevel.loadIntoUniverse(universe, "arena", {
+  bounds: [64, 32, 64],
+  template: new FlatTemplate(),
+  levelClass: ArenaLevel,
+  environment: {
+    sidesId: 7,
+    edgeId: 250,
+    edgeHeight: 0,
+    cloudsHeight: 256,
+  },
+  allowList: ["alice", "bob"],
+  useNullChangeRecord: false,
+})
+```
+
+## Teleporting players with `teleportPlayer`
+
+`BaseLevel.teleportPlayer(player)` is the recommended pattern for moving a player into a level. The base implementation removes the player from their current level (if any), sets `player.teleporting = true` to prevent re-entrant teleports, and — when called directly on `BaseLevel` — loads the level and calls `addPlayer`.
+
+In your own subclass, override `teleportPlayer` to load a specific level using your class's defaults:
+
+```js
+class MyLevel extends BaseLevel {
+  static async teleportPlayer(player) {
+    if (super.teleportPlayer(player) === false) return
+    MyLevel.loadIntoUniverse(player.universe, "my-level").then(async (level) => {
+      level.addPlayer(player, [60, 8, 4], [162, 254])
+    })
+  }
+}
+```
+
+`addPlayer(player, position, orientation)` accepts a position as `[x, y, z]` and an orientation as `[yaw, pitch]`.
+
+## Moving a player between levels
+
+To move a player from one level to another without going through `teleportPlayer`, call `removePlayer` on the current level and then `addPlayer` on the destination level:
+
+```js
+async function movePlayer(player, targetSpaceName) {
+  const targetLevel = await BaseLevel.loadIntoUniverse(player.universe, targetSpaceName, {})
+  if (player.space) player.space.removePlayer(player)
+  targetLevel.addPlayer(player, [32, 32, 32], [0, 0])
+}
+```
+
+<Warning>
+If you move players manually without using `teleportPlayer`, set `player.teleporting = true` before removing them and `player.teleporting = false` (or rely on `addPlayer` which resets it) to avoid conflicting teleport calls.
+</Warning>
+
+## Flushing change records
+
+Every block placement and command is buffered in memory before being written to disk. classicborne automatically flushes the buffer when `currentActionCount` exceeds 1024, but you should also flush periodically to limit data loss in case of an unexpected shutdown.
+
+The recommended pattern from the README is a `setInterval` that iterates over all loaded levels:
+
+```js
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+const universe = new BaseUniverse({
+  port: 25565,
+  postToMainServer: true,
+})
+
+// flush changes on all levels every 60 seconds
+setInterval(() => {
+  universe.levels.forEach(async (level) => {
+    level = await level
+    if (level.changeRecord) level.changeRecord.flushChanges()
+  })
+}, 60000)
+```
+
+<Tip>
+`universe.levels` stores promises, not level instances. Always `await` the promise inside the `forEach` callback before accessing `level.changeRecord`.
+</Tip>
+
+## Disposing a level
+
+When you want to unload a level and release its file handles, call `dispose(saveChanges)`. Passing `true` (the default) flushes any pending changes before closing the change record. Passing `false` discards unflushed changes.
+
+```js
+// Unload a level and save pending changes
+const level = await universe.levels.get("lobby")
+await level.dispose(true)
+
+// Remove it from the universe map so it can be reloaded later
+universe.levels.delete("lobby")
+```
+
+`dispose()` also emits the `"unloaded"` event and removes all listeners on the level instance.
+
+## Caching behavior
+
+`loadIntoUniverse` stores the level promise in `universe.levels` before the level finishes loading. This means:
+
+- A second call before the first resolves returns the same in-flight promise, not a duplicate level.
+- `universe.levels.get(spaceName)` returns a `Promise<BaseLevel>`, so you must `await` it to access the level instance.
+- Deleting the entry from `universe.levels` and calling `loadIntoUniverse` again creates a fresh level from the template, discarding any in-memory state.

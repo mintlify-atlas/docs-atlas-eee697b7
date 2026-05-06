@@ -1,0 +1,71 @@
+---
+title: "Introduction to classicborne"
+description: "Learn what classicborne provides: extensible base classes, CPE support, multi-level management, block change persistence, and ClassiCube heartbeat integration."
+---
+
+classicborne is a Node.js library that handles the Minecraft Classic protocol so you can focus on your server's game logic rather than packet parsing. Instead of implementing authentication handshakes, level streaming, entity tracking, and Classic Protocol Extensions (CPE) from scratch, you get a set of base classes — `BaseUniverse`, `BaseLevel`, and `BasePlayer` — that you subclass and extend. A minimal classicborne server is a few lines of code; a fully custom one with multiple worlds, per-player permissions, and persistent block history is just a matter of overriding the right methods.
+
+<Note>
+  Always import classes directly from their module paths (for example, `classicborne/class/server/BaseUniverse.mjs`) rather than from the barrel `index.mjs`. The barrel is used only for TypeDoc generation and some of its imports may fail at runtime.
+</Note>
+
+## Core concepts
+
+classicborne is organized around five main concepts that work together to form a server.
+
+<CardGroup cols={2}>
+  <Card title="Universe" icon="globe">
+    `BaseUniverse` is the top-level server object. It manages the TCP/WebSocket server, tracks connected players, maintains the map of loaded levels, and optionally posts a heartbeat to the ClassiCube server list. You subclass it to swap in your own `playerClass`.
+  </Card>
+  <Card title="Level" icon="map">
+    `BaseLevel` represents a single world. It holds the block buffer, bounds, the players currently in it, drones, and a change record for persistence. Levels are loaded into the universe on demand via `BaseLevel.loadIntoUniverse` and unloaded with `dispose`.
+  </Card>
+  <Card title="Player" icon="user">
+    `BasePlayer` represents a connected client. It handles authentication via `checkAuthInfo`, manages the player's current level reference (`space`), relays block placements, listens for position updates, and cleans up on disconnect. Override `initialize` to control what happens when a player joins.
+  </Card>
+  <Card title="Drone" icon="robot">
+    A `Drone` is a server-side entity visible to players in a level. Each connected player automatically gets an `Ego` drone that mirrors their position. You can create additional drones for NPCs or visual effects using `BaseLevel.addDrone`.
+  </Card>
+  <Card title="ChangeRecord" icon="clock-rotate-left">
+    `ChangeRecord` is an append-only binary log of every block change and command issued in a level. It supports restoring a level from its history, optional SQLite keyframe snapshots for fast restoration, and per-action trimming. Use `NullChangeRecord` when you don't need persistence.
+  </Card>
+  <Card title="Watchdog" icon="shield">
+    `Watchdog` is a per-player rate limiter that prevents clients from issuing block changes faster than the server can handle. It is attached to every `BasePlayer` automatically after authentication.
+  </Card>
+</CardGroup>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Classic Protocol Extensions" icon="plug">
+    classicborne ships with support for CPE out of the box: `CustomBlocks`, `BlockDefinitions`, `BlockDefinitionsExtended`, `ExtendedPlayerList`, `LevelEnvironment`, `BlockPermissions`, `SetHotbar`, `MessageTypes`, and more. Extensions are negotiated per-client automatically.
+  </Card>
+  <Card title="Multi-level management" icon="layer-group">
+    A single universe can host any number of levels simultaneously. Levels are loaded on first access and cached by name in `universe.levels`. Players move between levels via `BaseLevel.teleportPlayer`, which removes them from their current level before loading the next.
+  </Card>
+  <Card title="Block change persistence" icon="floppy-disk">
+    Block placements are recorded in a compact append-only format. Optionally cache keyframes so that restoring from a long history does not require replaying every change from the beginning. Flush pending changes on a timer or let the auto-flush trigger at 1,024 accumulated changes.
+  </Card>
+  <Card title="Heartbeat and server list" icon="heart-pulse">
+    Pass `postToMainServer: true` to your universe configuration and classicborne will post a heartbeat to the ClassiCube server list so players can discover your server. The heartbeat class is loaded asynchronously and stored on `universe.heartbeat`.
+  </Card>
+</CardGroup>
+
+## How classicborne compares to building from scratch
+
+Implementing a Minecraft Classic server without a library means writing a binary protocol parser, managing TCP framing and WebSocket upgrades, implementing CPE negotiation for every extension you want, streaming compressed level data to clients, tracking entity IDs per-client (each client sees a different numeric ID for the same player), and building your own persistence layer. classicborne handles all of that. Your job is to subclass `BaseUniverse`, `BaseLevel`, and `BasePlayer`, wire them together, and write the parts that make your server unique.
+
+<Tip>
+  The project [Voxel Telephone](https://github.com/BunnyNabbit/voxel-telephone) is a production classicborne server you can read to see how the library is used at scale.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install classicborne and run your first server in minutes.
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/BunnyNabbit/classicborne">
+    Browse the source, open issues, and follow development.
+  </Card>
+</CardGroup>

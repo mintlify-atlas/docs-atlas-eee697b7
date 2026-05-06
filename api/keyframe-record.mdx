@@ -1,0 +1,133 @@
+---
+title: 'KeyframeRecord API reference'
+description: 'Complete API reference for KeyframeRecord, which stores compressed voxel snapshots in SQLite so level restoration can skip replaying the full VHS log.'
+---
+
+`KeyframeRecord` manages a SQLite database (`dvr.db`) of level snapshots called keyframes. Each keyframe stores the compressed voxel data for a level at a specific point in the `vhs.bin` log, along with the file offset and action count needed to resume replay from that position. `ChangeRecord` uses `KeyframeRecord` automatically during `restoreBlockChangesToLevel` to find the most recent valid snapshot and skip the actions that precede it.
+
+<Warning>
+  `KeyframeRecord` requires the `sqlite3` native module. If `sqlite3` is not installed or has not been compiled for your Node.js version, `ChangeRecord` falls back to operating without keyframe support and logs a warning. See the [sqlite3 installation issue](https://github.com/BunnyNabbit/classicborne/issues/8) for guidance.
+</Warning>
+
+## Constructor
+
+`new KeyframeRecord(path)`
+
+Opens (or creates) the SQLite database at `path`. Creates the `keyframes` table and its index if they do not already exist. The constructor returns immediately; use the `ready` promise to wait for initialization to complete before calling other methods.
+
+<ParamField body="path" type="string" required>
+  File path to the SQLite database, typically `dvr.db` inside the same directory as `vhs.bin`.
+</ParamField>
+
+```js
+import { KeyframeRecord } from "classicborne/class/level/changeRecord/KeyframeRecord.mjs"
+
+const keyframes = new KeyframeRecord("./data/my-level/dvr.db")
+await keyframes.ready
+```
+
+## Instance properties
+
+<ResponseField name="path" type="string">
+  The file path passed to the constructor.
+</ResponseField>
+
+<ResponseField name="db" type="sqlite3.Database | null">
+  The underlying `sqlite3` `Database` instance. `null` until `ready` resolves.
+</ResponseField>
+
+<ResponseField name="ready" type="Promise<sqlite3.Database>">
+  Resolves with the `Database` instance once the table and index are created. All methods await `ready` internally, so you only need to await it yourself if you want to confirm initialization before proceeding.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="addKeyframe(offset, totalActionCount, bufferActionCount, template, voxelData, bounds, levelData)" type="Promise<number>">
+  Compresses `voxelData` with zlib and inserts a new keyframe row into the database. The template and bounds are combined into a single lookup key.
+
+  Returns a promise that resolves to the auto-incremented `id` of the newly inserted row.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `offset` | `number` | Byte offset in `vhs.bin` where replay should resume for this keyframe. |
+  | `totalActionCount` | `number` | Total action count in the log at this keyframe. |
+  | `bufferActionCount` | `number` | Action count within the current compressed chunk at this keyframe. |
+  | `template` | `string` | Template icon name associated with the level (e.g. `"empty"`). |
+  | `voxelData` | `Buffer` | Raw voxel data for the level at this point in time. |
+  | `bounds` | `Vector3` | Level dimensions as `[x, y, z]`. Combined with `template` to form the lookup key. |
+  | `levelData` | `string` | Optional JSON string of additional level metadata. Defaults to `"{}"`. |
+
+  ```js
+  const id = await keyframes.addKeyframe(
+    4096,       // offset in vhs.bin
+    200,        // totalActionCount
+    12,         // bufferActionCount
+    "empty",    // template icon name
+    level.blocks,
+    level.bounds
+  )
+  console.log(`Saved keyframe ${id}`)
+  ```
+</ResponseField>
+
+<ResponseField name="getLatestKeyframe(beforeActionCount, template, bounds)" type="Promise<object | null>">
+  Queries the database for the most recent keyframe whose `totalActionCount` is less than or equal to `beforeActionCount` and whose template-bounds key matches. Returns the full database row, or `null` if no matching keyframe exists.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `beforeActionCount` | `number` | Upper bound for `totalActionCount`. Pass `Infinity` to retrieve the latest keyframe regardless of action count. |
+  | `template` | `string` | Template icon name to filter by. |
+  | `bounds` | `Vector3` | Level dimensions. Combined with `template` to form the lookup key. |
+
+  ```js
+  const keyframe = await keyframes.getLatestKeyframe(500, "empty", [64, 64, 64])
+  if (keyframe) {
+    console.log(`Found keyframe at offset ${keyframe.offset}`)
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="purgeKeyframes(afterActionCount)" type="Promise<number>">
+  Deletes all keyframe rows whose `totalActionCount` is greater than `afterActionCount`. Called by `ChangeRecord.commit` after trimming the log to keep the keyframe database consistent.
+
+  Returns a promise that resolves to the number of rows deleted.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `afterActionCount` | `number` | Keyframes with a `totalActionCount` above this value are removed. |
+
+  ```js
+  const deleted = await keyframes.purgeKeyframes(500)
+  console.log(`Purged ${deleted} keyframes`)
+  ```
+</ResponseField>
+
+<ResponseField name="vacuum()" type="Promise<void>">
+  Runs `VACUUM` on the SQLite database to reclaim space freed by `purgeKeyframes` and optimize storage. This is a blocking operation that rewrites the database file.
+
+  ```js
+  await keyframes.vacuum()
+  ```
+</ResponseField>
+
+<ResponseField name="close()" type="Promise<void>">
+  Closes the SQLite database connection. Call this when the `KeyframeRecord` is no longer needed. `ChangeRecord.dispose` calls this automatically.
+
+  ```js
+  await keyframes.close()
+  ```
+</ResponseField>
+
+## Static methods
+
+<ResponseField name="getBoundsKey(bounds)" type="string">
+  Returns a string key derived from a `Vector3` bounds array by joining the three components with `.`. For example, `[64, 64, 64]` becomes `"64.64.64"`. This key is appended to the template name when storing and querying keyframes, ensuring snapshots from differently-sized levels do not collide.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `bounds` | `Vector3` | Level dimensions as `[x, y, z]`. |
+
+  ```js
+  KeyframeRecord.getBoundsKey([64, 64, 64]) // "64.64.64"
+  ```
+</ResponseField>

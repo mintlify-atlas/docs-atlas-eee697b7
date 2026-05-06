@@ -1,0 +1,154 @@
+---
+title: 'ChangeRecord API reference'
+description: 'Complete API reference for ChangeRecord, the append-only VHS format that persists block changes and commands to disk with optional keyframe snapshots.'
+---
+
+`ChangeRecord` keeps an append-only log of block changes and commands for a level. Actions are buffered in memory and periodically flushed to a compressed `vhs.bin` file on disk. When a level restarts, `restoreBlockChangesToLevel` replays the log to reconstruct the level state. For long logs, an optional `KeyframeRecord` stores periodic snapshots so restoration can start from a recent checkpoint instead of replaying from the beginning.
+
+## Constructor
+
+`new ChangeRecord(path, loadedCallback, options)`
+
+Creates a new `ChangeRecord`. If the directory at `path` does not exist, it is created. The constructor opens the `vhs.bin` file handle asynchronously. `loadedCallback` is called once all file handles are ready.
+
+<ParamField body="path" type="string" required>
+  Directory path where `vhs.bin` (and, if enabled, `dvr.db`) are stored. Created automatically if it does not exist.
+</ParamField>
+
+<ParamField body="loadedCallback" type="function">
+  Called with the `ChangeRecord` instance as its argument once all file handles are open and the record is ready to use.
+</ParamField>
+
+<ParamField body="options" type="object">
+  <Expandable title="properties">
+    <ParamField body="useKeyframeRecord" type="boolean" default="true">
+      When `true`, classicborne initializes a `KeyframeRecord` backed by `dvr.db` in the same directory. Requires the `sqlite3` native module. If `sqlite3` is unavailable, classicborne logs a warning and continues without keyframe support. Set to `false` to suppress the warning and skip keyframe initialization entirely.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```js
+import { ChangeRecord } from "classicborne/class/level/changeRecord/ChangeRecord.mjs"
+
+const record = new ChangeRecord("./data/my-level", (record) => {
+  console.log("ChangeRecord ready")
+})
+```
+
+## Instance properties
+
+<ResponseField name="path" type="string">
+  The directory path passed to the constructor. Both `vhs.bin` and `dvr.db` (when enabled) live here.
+</ResponseField>
+
+<ResponseField name="draining" type="boolean">
+  `true` while `flushChanges` is writing to disk. Becomes `false` once the flush completes.
+</ResponseField>
+
+<ResponseField name="dirty" type="boolean">
+  `true` if there are buffered actions that have not yet been flushed to `vhs.bin`.
+</ResponseField>
+
+<ResponseField name="actionCount" type="number">
+  Total number of actions appended since the record was created or since the last `commit`.
+</ResponseField>
+
+<ResponseField name="currentActionCount" type="number">
+  Number of actions appended since the last `flushChanges` call. Reset to `0` on each flush.
+</ResponseField>
+
+<ResponseField name="vhsFh" type="fs.promises.FileHandle">
+  The open file handle for `vhs.bin`. `null` until `loadedCallback` is called.
+</ResponseField>
+
+<ResponseField name="keyframeRecord" type="KeyframeRecord | null">
+  The `KeyframeRecord` instance, or `null` if `useKeyframeRecord` was `false` or `sqlite3` was unavailable.
+</ResponseField>
+
+<ResponseField name="bounds" type="Vector3">
+  Informational level bounds used when creating and retrieving keyframes. Defaults to `[64, 64, 64]`.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="addBlockChange(position, block)" type="void">
+  Appends a single block change action to the in-memory buffer. Increments `actionCount` and `currentActionCount`, and sets `dirty` to `true`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `Vector3` | `[x, y, z]` coordinates of the changed block. |
+  | `block` | `number` | Block type ID (0–255). |
+
+  ```js
+  record.addBlockChange([10, 5, 20], 4)
+  ```
+</ResponseField>
+
+<ResponseField name="appendAction(isCommand, actionBytes, commandString)" type="void">
+  Low-level method that writes a raw action entry to the buffer. `addBlockChange` calls this internally. Use it directly when recording command actions.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `isCommand` | `boolean` | `true` for a command action, `false` for a single block change. |
+  | `actionBytes` | `number[]` | Byte array for the action. Must have exactly four entries when `isCommand` is `false`. |
+  | `commandString` | `string` | The full command string. Only used when `isCommand` is `true`. |
+</ResponseField>
+
+<ResponseField name="flushChanges()" type="Promise<number>">
+  Compresses the current in-memory buffer with zlib and appends the compressed chunk to `vhs.bin`. Resets `currentActionCount` to `0` and sets `dirty` to `false`. Sets `draining` to `true` for the duration of the write.
+
+  Returns a promise that resolves to the number of bytes written (compressed length plus the 4-byte length header).
+
+  ```js
+  const bytesWritten = await record.flushChanges()
+  console.log(`Flushed ${bytesWritten} bytes`)
+  ```
+</ResponseField>
+
+<ResponseField name="restoreBlockChangesToLevel(level, maxActions, staller)" type="Promise<number>">
+  Replays recorded actions from `vhs.bin` onto `level`. If a `KeyframeRecord` is available, classicborne looks up the most recent valid keyframe and starts replay from that point instead of the beginning of the file.
+
+  If `staller` is defined, it is awaited before each action and keyframe creation is suppressed for that restore pass.
+
+  Returns a promise that resolves to the total number of actions applied.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `level` | `BaseLevel` | The level to restore changes into. |
+  | `maxActions` | `number` | Stop after replaying this many actions. Omit or pass `undefined` to replay all. |
+  | `staller` | `function` | Async function awaited before each action, used to yield control during long restores. |
+
+  ```js
+  const count = await record.restoreBlockChangesToLevel(level)
+  console.log(`Restored ${count} actions`)
+  ```
+</ResponseField>
+
+<ResponseField name="commit(toActionCount, level)" type="Promise<number>">
+  Trims `vhs.bin` to the specified action count, discarding everything after it. Any unflushed changes are flushed first. After trimming, classicborne purges keyframes beyond `toActionCount` from the `KeyframeRecord`.
+
+  Returns a promise that resolves to the number of actions written to the trimmed file.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `toActionCount` | `number` | The action count to trim to. Actions beyond this point are discarded. |
+  | `level` | `BaseLevel` | The level associated with this record, used to look up the correct keyframe during trimming. |
+
+  ```js
+  await record.commit(500, level)
+  ```
+</ResponseField>
+
+<ResponseField name="dispose()" type="Promise<void>">
+  Closes the `vhs.bin` file handle and, if present, the `KeyframeRecord` database connection. Does not flush buffered changes before closing.
+
+  ```js
+  await record.dispose()
+  ```
+</ResponseField>
+
+## Static properties
+
+<ResponseField name="lagKeyframeTime" type="number">
+  Time threshold in milliseconds used by `restoreBlockChangesToLevel` to decide when to create a new keyframe during a restore pass. When the elapsed wall-clock time since the last keyframe exceeds this value (and no `staller` is provided), a new keyframe snapshot is saved. Defaults to `250`.
+</ResponseField>

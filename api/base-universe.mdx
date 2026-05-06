@@ -1,0 +1,154 @@
+---
+title: 'BaseUniverse API reference'
+description: 'Complete API reference for BaseUniverse, the central class that manages server lifecycle, connected players, and loaded levels in classicborne.'
+---
+
+`BaseUniverse` is the core of a classicborne server. It owns the TCP listener, maintains the player list and level map, and optionally posts heartbeats to the ClassiCube server list. You extend `BaseUniverse` to add your own game logic, then instantiate it with a configuration object to start the server.
+
+## Constructor
+
+`new BaseUniverse(serverConfiguration)`
+
+Creates and starts the server. The underlying TCP socket begins listening immediately. If `serverConfiguration.postToMainServer` is `true`, the constructor asynchronously loads `BaseHeartbeat` and begins the heartbeat loop.
+
+<ParamField body="serverConfiguration" type="object" required>
+  Configuration object passed directly to the server and stored as `this.serverConfiguration`.
+
+  <Expandable title="properties">
+    <ParamField body="port" type="number" required>
+      TCP port the server listens on.
+    </ParamField>
+
+    <ParamField body="postToMainServer" type="boolean" required>
+      When `true`, classicborne posts periodic heartbeats to the ClassiCube server list so the server appears publicly. Set to `false` for private or local servers.
+    </ParamField>
+
+    <ParamField body="serverName" type="string">
+      Name shown in the ClassiCube server list. Defaults to `"A classicborne server."` when omitted.
+    </ParamField>
+
+    <ParamField body="texturePackUrl" type="string">
+      Texture pack URL sent to connecting clients.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```javascript
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+const universe = new BaseUniverse({
+  port: 25565,
+  postToMainServer: true,
+  serverName: "My classicborne server",
+})
+```
+
+## Instance properties
+
+<ResponseField name="server" type="Server">
+  The underlying `classicborne-server-protocol` `Server` instance. Manages the raw TCP and WebSocket connections.
+</ResponseField>
+
+<ResponseField name="serverConfiguration" type="object">
+  The configuration object passed to the constructor. Access it to read `port`, `serverName`, and other settings at runtime.
+</ResponseField>
+
+<ResponseField name="levels" type="Map<string, BaseLevel>">
+  Map of all currently loaded levels, keyed by level name. Use `BaseLevel.loadIntoUniverse` or `BaseLevel.teleportPlayer` to populate this map — do not write to it directly.
+</ResponseField>
+
+<ResponseField name="heartbeat" type="BaseHeartbeat">
+  The heartbeat instance responsible for announcing the server to the ClassiCube server list. Only defined when `serverConfiguration.postToMainServer` is `true`. Because `BaseHeartbeat` is loaded via dynamic import, this property is assigned asynchronously shortly after construction.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="addPlayer(player)" type="void">
+  Registers a `BasePlayer` into the universe. Scans for an available network ID in the range 0–126, assigns it to the player, notifies all other connected players of the new arrival via the `ExtendedPlayerList` extension, and emits the `playerAdded` event.
+
+  Throws an `Error` if no network ID is available (i.e., 127 players are already connected).
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player instance to register. |
+</ResponseField>
+
+<ResponseField name="removePlayer(player)" type="void">
+  Unregisters a `BasePlayer` from the universe. Removes the player from the internal list, notifies all remaining players via `ExtendedPlayerList`, and emits the `playerRemoved` event. Called automatically on client disconnect.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player instance to unregister. |
+</ResponseField>
+
+## Events
+
+`BaseUniverse` extends `TypedEmitter` with the following events.
+
+<ResponseField name="playerAdded" type="event">
+  Emitted after a player is fully registered and assigned a network ID.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player that joined. |
+
+  ```javascript
+  universe.on("playerAdded", (player) => {
+    console.log(`Player joined: ${player.username}`)
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="playerRemoved" type="event">
+  Emitted after a player is removed from the universe.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player that left. |
+
+  ```javascript
+  universe.on("playerRemoved", (player) => {
+    console.log(`Player left: ${player.username}`)
+  })
+  ```
+</ResponseField>
+
+## Static properties
+
+<ResponseField name="playerClass" type="typeof BasePlayer">
+  The class instantiated whenever a client connects. Defaults to `BasePlayer`. Override this in your subclass to use a custom player class.
+</ResponseField>
+
+<ResponseField name="heartbeatClass" type="Promise<typeof BaseHeartbeat>">
+  A promise that resolves to the `BaseHeartbeat` class. `BaseUniverse` loads the module lazily via dynamic import. Override this static property on your subclass to substitute a custom heartbeat implementation.
+</ResponseField>
+
+## Subclassing
+
+Extend `BaseUniverse` to add game logic, swap in custom player or heartbeat classes, and listen for lifecycle events.
+
+```javascript
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+import { CustomPlayer } from "./CustomPlayer.mjs"
+
+class MyUniverse extends BaseUniverse {
+  static playerClass = CustomPlayer
+  // Add custom logic.
+}
+
+const universe = new MyUniverse({ port: 25565 })
+universe.on("playerAdded", (player) => {
+  console.log(`Player joined: ${player.username}`)
+})
+```
+
+To replace the heartbeat class, assign a promise that resolves to your custom class:
+
+```javascript
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+import { MyHeartbeat } from "./MyHeartbeat.mjs"
+
+class MyUniverse extends BaseUniverse {
+  static heartbeatClass = Promise.resolve(MyHeartbeat)
+}
+```

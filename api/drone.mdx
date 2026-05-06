@@ -1,0 +1,97 @@
+---
+title: 'Drone API reference'
+description: 'Complete API reference for Drone, the entity class that represents a character in a level, syncs position to clients, and emits lifecycle events.'
+---
+
+`Drone` represents a character entity in a level. It can be a player's avatar or an NPC. `BaseLevel` automatically creates a `Drone` for each connected player using the player's `Ego`, and destroys it when the player leaves. `DroneTransmitter` subscribes to a drone's events to replicate its position and appearance to clients. `Drone` extends `TypedEmitter`.
+
+## Constructor
+
+`new Drone(ego)`
+
+Creates a drone with the given appearance. If you omit `ego`, the drone is created with a default `Ego` instance.
+
+<ParamField body="ego" type="Ego" default="new Ego()">
+  The drone's appearance. Passed directly to `DroneTransmitter` when the drone is transmitted to a client.
+</ParamField>
+
+```js
+import { Drone } from "classicborne/class/level/drone/Drone.mjs"
+import { Ego } from "classicborne/class/level/drone/Ego.mjs"
+
+const drone = new Drone(new Ego({ name: "Steve" }))
+```
+
+## Instance properties
+
+<ResponseField name="position" type="Vector3">
+  The drone's current world position as a three-element array `[x, y, z]`. Updated by `setPosition`. Initial value is `[0, 0, 0]`.
+</ResponseField>
+
+<ResponseField name="orientation" type="Vector2">
+  The drone's current orientation as a two-element array `[yaw, pitch]`. Updated by `setPosition`. Initial value is `[0, 0]`.
+</ResponseField>
+
+<ResponseField name="ego" type="Ego">
+  The `Ego` instance describing the drone's name, skin, and scale. Set on construction and read by `DroneTransmitter` when spawning the entity on a client.
+</ResponseField>
+
+<ResponseField name="destroyed" type="boolean">
+  `true` after `destroy` has been called. Use this to guard against acting on a drone that has already been removed from the level.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="setPosition(position, orientation)" type="void">
+  Updates `this.position` and `this.orientation` from the provided objects, then emits the `position` event so all subscribed `DroneTransmitter` instances send an absolute position update to their clients.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `object` | Object with `x`, `y`, and `z` number properties. |
+  | `orientation` | `object` | Object with `yaw` and `pitch` number properties. |
+
+  ```js
+  drone.setPosition(
+    { x: 16, y: 64, z: 16 },
+    { yaw: 0, pitch: 0 }
+  )
+  ```
+</ResponseField>
+
+<ResponseField name="destroy()" type="void">
+  Marks the drone as destroyed, emits the `destroy` event, and removes all listeners. Calling `destroy` on an already-destroyed drone is a no-op. `BaseLevel` calls this automatically when a player leaves the level.
+
+  ```js
+  drone.destroy()
+  console.log(drone.destroyed) // true
+  ```
+</ResponseField>
+
+## Events
+
+`Drone` extends `TypedEmitter` with the following events.
+
+<ResponseField name="position" type="event">
+  Emitted by `setPosition` after `this.position` and `this.orientation` are updated.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `Vector3` | The updated position `[x, y, z]`. |
+  | `orientation` | `Vector2` | The updated orientation `[yaw, pitch]`. |
+
+  ```js
+  drone.on("position", (position, orientation) => {
+    console.log("Drone moved to", position)
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="destroy" type="event">
+  Emitted once when `destroy` is called. All listeners are removed immediately after emission.
+
+  ```js
+  drone.on("destroy", () => {
+    console.log("Drone was destroyed")
+  })
+  ```
+</ResponseField>

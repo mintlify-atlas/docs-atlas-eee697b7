@@ -1,0 +1,299 @@
+---
+title: "BasePlayer API reference"
+description: "BasePlayer represents a connected player in classicborne. It exposes methods for authentication, messaging, position tracking, and display name formatting."
+---
+
+`BasePlayer` is the core class representing a connected client in your server. It extends `EventEmitter` and handles authentication, block placement, position updates, and message delivery. You extend `BasePlayer` to customize authentication and post-auth behavior for your server.
+
+## Constructor
+
+```js
+new BasePlayer(client, universe, authInfo)
+```
+
+`BaseUniverse` calls this constructor automatically when a client connects. You do not instantiate `BasePlayer` directly.
+
+<ParamField path="client" type="Client" required>
+  The `classicborne-server-protocol` `Client` instance for this connection.
+</ParamField>
+
+<ParamField path="universe" type="BaseUniverse" required>
+  The `BaseUniverse` instance that accepted this connection.
+</ParamField>
+
+<ParamField path="authInfo" type="object" required>
+  Raw authentication info provided by the protocol. Must include a `username` string property.
+</ParamField>
+
+## Instance properties
+
+<ParamField path="client" type="Client">
+  The `classicborne-server-protocol` `Client` instance for this player's connection.
+</ParamField>
+
+<ParamField path="universe" type="BaseUniverse">
+  The `BaseUniverse` instance that owns this player.
+</ParamField>
+
+<ParamField path="authInfo" type="object">
+  The raw auth info received from the protocol handshake.
+</ParamField>
+
+<ParamField path="username" type="string">
+  The player's username, sourced from `authInfo.username`.
+</ParamField>
+
+<ParamField path="space" type="BaseLevel | null">
+  The level the player is currently in, or `null` if the player has not been placed in a level yet.
+</ParamField>
+
+<ParamField path="position" type="number[]">
+  The player's current position as a `Vector3` array `[x, y, z]`. Set to `[0, 0, 0]` after successful authentication.
+</ParamField>
+
+<ParamField path="orientation" type="number[]">
+  The player's current orientation as a `Vector2` array `[yaw, pitch]`. Set to `[0, 0]` after successful authentication.
+</ParamField>
+
+<ParamField path="heldBlock" type="number">
+  The block ID the player is currently holding. Updated each time a position packet arrives.
+</ParamField>
+
+<ParamField path="netId" type="number">
+  The network ID assigned to this player by `universe.addPlayer`. Valid range is `0`–`126`.
+</ParamField>
+
+<ParamField path="teleporting" type="boolean">
+  Whether the player is currently in a teleport sequence.
+</ParamField>
+
+<ParamField path="watchdog" type="Watchdog">
+  The [`Watchdog`](/api/watchdog) instance monitoring this player's block operation rate. Available after `initialize` completes successfully.
+</ParamField>
+
+<ParamField path="droneTransmitter" type="DroneTransmitter">
+  The `DroneTransmitter` instance attached to this player's client. Available after `initialize` completes successfully.
+</ParamField>
+
+<ParamField path="ready" type="Promise<boolean>">
+  A promise that resolves to `true` if authentication succeeded, or `false` if it failed. Set immediately in the constructor as the return value of `initialize`.
+</ParamField>
+
+<ParamField path="destroyed" type="boolean">
+  Set to `true` when the client connection closes and cleanup runs.
+</ParamField>
+
+## Instance methods
+
+### `initialize(client, universe, authInfo)`
+
+Runs the full authentication and setup flow. Called automatically in the constructor — do not call it manually.
+
+Calls `checkAuthInfo` and disconnects the client with the rejection reason if it does not return `true`. On success, sets up `position`, `orientation`, `watchdog`, `droneTransmitter`, block/position listeners, and registers a `close` handler for cleanup.
+
+**Returns:** `Promise<boolean>` — `true` if authentication succeeded, `false` if the player was rejected.
+
+---
+
+### `checkAuthInfo(client, universe, authInfo)`
+
+Override this method in a subclass to implement custom authentication logic.
+
+**Returns:** `Promise<true | string>` — return `true` to allow the connection, or a string to reject the connection with that string as the disconnect message.
+
+```js
+class MyPlayer extends BasePlayer {
+  async checkAuthInfo(client, universe, authInfo) {
+    if (!allowedUsernames.includes(authInfo.username)) {
+      return "You are not on the allowlist."
+    }
+    return true
+  }
+}
+```
+
+---
+
+### `afterAuth()`
+
+Called after a successful `checkAuthInfo`. The base implementation sends a `serverIdentification` packet. Override this method to run custom logic immediately after the player authenticates.
+
+```js
+class MyPlayer extends BasePlayer {
+  async afterAuth() {
+    await super.afterAuth()
+    console.log(`${this.username} authenticated.`)
+  }
+}
+```
+
+**Returns:** `Promise<void>`
+
+---
+
+### `getDisplayName(prefixTitle?)`
+
+Returns the player's display name, truncated to 64 characters, with an optional color-code prefix.
+
+<ParamField path="prefixTitle" type="string" default="&7">
+  A Minecraft Classic color code or title string prepended to the username. Defaults to `"&7"` (grey).
+</ParamField>
+
+**Returns:** `string`
+
+```js
+player.getDisplayName()       // "&7Steve"
+player.getDisplayName("&c")   // "&cSteve"
+```
+
+---
+
+### `message(message, types?, continueAdornment?)`
+
+Sends a message to the player. Handles messages longer than 64 characters by splitting them across multiple sends, carrying forward the last active color code. Right-aligned message types are left-padded on mobile ClassiCube clients to avoid controller overlap.
+
+<ParamField path="message" type="string" required>
+  The message text to send.
+</ParamField>
+
+<ParamField path="types" type="number | number[]" default="[0]">
+  One or more [message type](#static-properties) numbers. Defaults to `[0]` (chat).
+</ParamField>
+
+<ParamField path="continueAdornment" type="string" default='"> "'>
+  Prefix prepended to continuation lines when a message is split. Defaults to `"> "`.
+</ParamField>
+
+**Returns:** `void`
+
+```js
+// Send a chat message
+player.message("Welcome to the server!")
+
+// Send to the bottom HUD row
+player.message("&aBlocks placed: 42", [BasePlayer.messageTypes.bottomLowestRow])
+
+// Send a long message (auto-split)
+player.message("This is a very long message that exceeds the 64-character limit and will be split.")
+```
+
+---
+
+### `clearPrints(printTypes?)`
+
+Clears displayed HUD messages by sending a blank space to each of the given message type slots.
+
+<ParamField path="printTypes" type="number[]" default="BasePlayer.printAreaTypes.bottom">
+  An array of message type numbers to clear. Defaults to all three bottom HUD rows.
+</ParamField>
+
+**Returns:** `void`
+
+```js
+// Clear the bottom HUD rows
+player.clearPrints()
+
+// Clear the top HUD rows
+player.clearPrints(BasePlayer.printAreaTypes.top)
+```
+
+---
+
+### `isClassiCubeMobile()`
+
+Returns `true` if the connected client is a mobile ClassiCube client (Android, iOS, or web mobile), based on the `client.appName` string.
+
+**Returns:** `boolean | undefined`
+
+---
+
+### `listenSetBlock()`
+
+Internal. Registers the `setBlock` event handler on `client`. Checks `watchdog` rate limits, validates block coordinates against the level's bounds, and applies the block edit to `space` if the player has permission.
+
+---
+
+### `listenPosition()`
+
+Internal. Registers the `position` event handler on `client`. Updates `this.position`, `this.heldBlock`, and `this.orientation` from each incoming position packet. Also updates a controlled drone's position if one is active.
+
+## Static properties
+
+### `messageTypes`
+
+Maps named HUD positions to their Minecraft Classic message type numbers.
+
+| Name | Value |
+|------|-------|
+| `bottomLowestRow` | `11` |
+| `bottomMiddleRow` | `12` |
+| `bottomHighestRow` | `13` |
+| `topLowestRow` | `3` |
+| `topMiddleRow` | `2` |
+| `topHighestRow` | `1` |
+| `center` | `100` |
+
+```js
+player.message("&eHello!", [BasePlayer.messageTypes.center])
+```
+
+---
+
+### `printAreaTypes`
+
+Groups of message types representing named HUD areas, used with `clearPrints`.
+
+```js
+{
+  bottom: [11, 12, 13],
+  top: [3, 2, 1],
+  center: [100]
+}
+```
+
+---
+
+### `rightAlignedMessageTypes`
+
+An array of message type numbers that render on the right side of the screen. Used internally by `message` to apply mobile padding.
+
+```js
+// [11, 12, 13, 3, 2, 1]
+BasePlayer.rightAlignedMessageTypes
+```
+
+---
+
+### `classiCubeMobileSuffixes`
+
+App name suffixes used to detect mobile ClassiCube clients.
+
+```js
+["android alpha", "iOS alpha", "web mobile"]
+```
+
+---
+
+### `defaultHotbar`
+
+The default block IDs sent to the client's hotbar slots.
+
+```js
+[1, 2, 3, 4, 5, 6, 7, 8, 9]
+```
+
+---
+
+### `sendHotbar(player)`
+
+Sends `defaultHotbar` to the given player's client using the `SetHotbar` CPE extension.
+
+<ParamField path="player" type="BasePlayer" required>
+  The player whose client should receive the hotbar update.
+</ParamField>
+
+**Returns:** `void`
+
+```js
+BasePlayer.sendHotbar(player)
+```

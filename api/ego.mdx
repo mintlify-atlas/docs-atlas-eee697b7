@@ -1,0 +1,118 @@
+---
+title: 'Ego API reference'
+description: "Complete API reference for Ego, the class that defines a Drone's display name, skin, and model scale transmitted to clients by DroneTransmitter."
+---
+
+`Ego` describes a `Drone`'s appearance: its display name, skin identifier, and model scale. `DroneTransmitter` reads these properties when it spawns a drone on a client. `BaseLevel` creates an `Ego` for each connecting player using `new Ego({ name: player.getDisplayName() })`. All setter methods return `this` so you can chain them.
+
+## Constructor
+
+`new Ego(ego)`
+
+Creates an ego with the given properties. All properties are optional and fall back to safe defaults when omitted.
+
+<ParamField body="ego" type="object" default="{}">
+  Configuration object for the ego's initial appearance.
+
+  <Expandable title="properties">
+    <ParamField body="name" type="string" default='""'>
+      The display name of the entity. Limited to 64 characters. When `skin` is not provided, `name` is also used as the skin identifier.
+    </ParamField>
+
+    <ParamField body="skin" type="string">
+      The skin identifier for the entity. Defaults to the value of `name` when omitted. Limited to 64 characters. See `setSkin` for details on how clients resolve skin strings.
+    </ParamField>
+
+    <ParamField body="scale" type="Vector3" default="[1, 1, 1]">
+      The X, Y, and Z scale of the entity model as a three-element array.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```js
+import { Ego } from "classicborne/class/level/drone/Ego.mjs"
+
+const ego = new Ego({ name: "Steve" })
+```
+
+You can also pass a serialized ego object returned by `ego.serialize()`:
+
+```js
+const copy = new Ego(ego.serialize())
+```
+
+## Instance properties
+
+<ResponseField name="name" type="string">
+  The entity's display name. Set from the constructor's `ego.name` property, or `""` if omitted. Some clients use `name` to determine the skin when `skin` is not explicitly set.
+</ResponseField>
+
+<ResponseField name="skin" type="string">
+  The entity's skin identifier. Defaults to the value of `name` when not provided in the constructor. Updated by `setSkin`.
+</ResponseField>
+
+<ResponseField name="scale" type="Vector3">
+  The entity model's scale as `[x, y, z]`. Defaults to `[1, 1, 1]`. `DroneTransmitter` multiplies each component by 1000 before sending it via the `EntityProperty` extension.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="setName(name)" type="this">
+  Sets the entity's display name. Returns `this` for chaining.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `name` | `string` | The new name. Limited to 64 characters. |
+
+  ```js
+  ego.setName("Alex")
+  ```
+</ResponseField>
+
+<ResponseField name="setSkin(skin)" type="this">
+  Sets the entity's skin identifier. Returns `this` for chaining.
+
+  How a skin string is resolved depends on the client. ClassiCube looks up ClassiCube account usernames and fetches skins from its own servers. ClassiCube also accepts a URL to load a custom skin. Other clients may resolve the string differently.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `skin` | `string` | A username or URL. Limited to 64 characters. |
+
+  ```js
+  ego.setSkin("https://example.com/skin.png")
+  ```
+</ResponseField>
+
+<ResponseField name="setScale(scale)" type="this">
+  Sets the entity model's scale. Returns `this` for chaining.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `scale` | `Vector3` | Three-element array `[x, y, z]`. |
+
+  ```js
+  ego.setScale([2, 2, 2])
+  ```
+</ResponseField>
+
+<ResponseField name="serialize()" type="object">
+  Returns a plain object containing `name`, `skin`, and `scale`. You can pass the result directly to the `Ego` constructor to create a copy.
+
+  ```js
+  const data = ego.serialize()
+  // { name: "Steve", skin: "Steve", scale: [1, 1, 1] }
+
+  const copy = new Ego(data)
+  ```
+</ResponseField>
+
+## Chaining example
+
+All setters return `this`, so you can configure an ego in a single expression:
+
+```js
+const ego = new Ego()
+  .setName("Steve")
+  .setSkin("https://example.com/skin.png")
+  .setScale([1.5, 1.5, 1.5])
+```

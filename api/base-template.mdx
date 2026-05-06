@@ -1,0 +1,138 @@
+---
+title: 'BaseTemplate and EmptyTemplate API'
+description: 'API reference for BaseTemplate, the abstract base class for level generators, and EmptyTemplate, its built-in implementation that produces all-air levels.'
+---
+
+`BaseTemplate` is the abstract base class for classicborne level generators. You extend it to implement `generate`, which receives a `bounds` array and returns a `Buffer` of block IDs used to populate a new level. classicborne ships with one built-in implementation: `EmptyTemplate`, which returns an all-air buffer.
+
+## BaseTemplate
+
+### Constructor
+
+`new BaseTemplate(iconName, defaultBounds)`
+
+Creates a new template. Throws an `Error` if `iconName` is falsy.
+
+<ParamField body="iconName" type="string" required>
+  A short identifier for this template. Used as a display name or icon key in server tooling.
+</ParamField>
+
+<ParamField body="defaultBounds" type="Vector3" default="[64, 64, 64]">
+  Default level dimensions `[x, y, z]` used when `generate` is called without explicit bounds.
+</ParamField>
+
+```js
+import { BaseTemplate } from "classicborne/class/level/BaseTemplate.mjs"
+
+class FlatTemplate extends BaseTemplate {
+  constructor() {
+    super("flat", [128, 64, 128])
+  }
+
+  generate(bounds = this.defaultBounds) {
+    const buffer = Buffer.alloc(bounds[0] * bounds[1] * bounds[2])
+    // Fill the bottom half with stone (block ID 1)
+    for (let y = 0; y < bounds[1] / 2; y++) {
+      for (let z = 0; z < bounds[2]; z++) {
+        for (let x = 0; x < bounds[0]; x++) {
+          buffer[x + bounds[0] * (z + bounds[2] * y)] = 1
+        }
+      }
+    }
+    return buffer
+  }
+}
+```
+
+### Instance properties
+
+<ResponseField name="iconName" type="string">
+  The identifier passed to the constructor. Read-only by convention.
+</ResponseField>
+
+<ResponseField name="defaultBounds" type="Vector3">
+  The default `[x, y, z]` dimensions used when `generate` is called without a `bounds` argument.
+</ResponseField>
+
+### Instance methods
+
+<ResponseField name="generate(bounds)" type="Buffer">
+  Abstract method. Subclasses must override this to return a `Buffer` whose length equals `bounds[0] * bounds[1] * bounds[2]`. Each byte is a block ID. The default implementation throws `Error: Template generate method not implemented.`
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `bounds` | `Vector3` | `this.defaultBounds` | The `[x, y, z]` dimensions of the level to generate. |
+
+  <Warning>
+    You must override `generate` in every subclass. Calling the base method throws immediately.
+  </Warning>
+</ResponseField>
+
+## EmptyTemplate
+
+`EmptyTemplate extends BaseTemplate`
+
+The built-in template that produces a completely empty (all-air) level. classicborne uses it as the default `BaseLevel.template` when no template is specified.
+
+### Constructor
+
+`new EmptyTemplate()`
+
+No arguments required. Calls `super("empty")` with the `"empty"` icon name and the default `[64, 64, 64]` bounds.
+
+```js
+import { EmptyTemplate } from "classicborne/class/level/BaseTemplate.mjs"
+
+const template = new EmptyTemplate()
+const buffer = template.generate([64, 64, 64])
+// buffer is a zero-filled Buffer of length 262144
+```
+
+### Instance methods
+
+<ResponseField name="generate(bounds)" type="Buffer">
+  Returns `Buffer.alloc(bounds[0] * bounds[1] * bounds[2])` — a zero-filled buffer representing a level where every block is air (block ID 0).
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `bounds` | `Vector3` | `this.defaultBounds` | The `[x, y, z]` dimensions of the level to generate. |
+
+  ```js
+  const bounds = [64, 64, 64]
+  const blocks = template.generate(bounds)
+  console.log(blocks.length) // 262144
+  console.log(blocks[0])     // 0 (air)
+  ```
+</ResponseField>
+
+## Subclassing BaseTemplate
+
+Implement `generate` to return any block layout you need. Pass your template to `BaseLevel.loadIntoUniverse` via `defaults.template`, or set it as a static default on your `BaseLevel` subclass.
+
+```js
+import { BaseTemplate } from "classicborne/class/level/BaseTemplate.mjs"
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+class CheckerTemplate extends BaseTemplate {
+  constructor() {
+    super("checker", [64, 1, 64])
+  }
+
+  generate(bounds = this.defaultBounds) {
+    const buffer = Buffer.alloc(bounds[0] * bounds[1] * bounds[2])
+    for (let z = 0; z < bounds[2]; z++) {
+      for (let x = 0; x < bounds[0]; x++) {
+        const block = (x + z) % 2 === 0 ? 1 : 4 // stone or cobblestone
+        buffer[x + bounds[0] * z] = block
+      }
+    }
+    return buffer
+  }
+}
+
+class CheckerLevel extends BaseLevel {
+  static template = new CheckerTemplate()
+}
+
+const level = await CheckerLevel.loadIntoUniverse(universe, "checker-room", {})
+```

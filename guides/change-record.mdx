@@ -1,0 +1,144 @@
+---
+title: "Persist level changes using ChangeRecord"
+description: "ChangeRecord is classicborne's append-only persistence layer. Learn to flush changes, restore levels, capture keyframes, and opt out with NullChangeRecord."
+---
+
+classicborne persists block changes and commands through `ChangeRecord`, an append-only binary format stored in a `vhs.bin` file. Every block placement and command issued to a level is recorded as a sequence of bytes. When the server restarts and a level is loaded, classicborne replays the entire record to restore the world to its last state. Optional SQLite keyframe snapshots make this restoration fast even for long-running worlds.
+
+## How ChangeRecord is created
+
+You don't instantiate `ChangeRecord` directly. `BaseLevel.loadIntoUniverse()` creates one automatically for each level, using the `spaceName` as the directory name:
+
+```
+blockRecords/
+  my-level/
+    vhs.bin     ← compressed block change log
+    dvr.db      ← SQLite keyframe database (if sqlite is available)
+```
+
+When `loadIntoUniverse` runs, it reads `useNullChangeRecord` from the `defaults` object and imports either `ChangeRecord` or `NullChangeRecord` accordingly:
+
+```js
+// From BaseLevel.loadIntoUniverse()
+level.changeRecord = new changeRecordClass(`./blockRecords/${spaceName}/`, async () => {
+  await level.changeRecord.restoreBlockChangesToLevel(level)
+  level.emit("loaded")
+  resolve(level)
+})
+```
+
+The second argument is a callback that fires once the file handles are open. classicborne uses it to replay the change history before the level promise resolves — your code only gets the level after all recorded changes have been applied.
+
+## Automatic flushing
+
+Changes are buffered in memory as a `SmartBuffer` and written to disk in compressed chunks. classicborne flushes automatically when `currentActionCount` exceeds 1024:
+
+```js
+// From BaseLevel.setBlock()
+if (!this.changeRecord.draining && this.changeRecord.currentActionCount > 1024) {
+  this.changeRecord.flushChanges()
+}
+```
+
+The same check runs after each command is committed through `BaseLevelCommandInterpreter.commitAction()`.
+
+## Manual flushing
+
+Relying only on the automatic threshold means up to 1024 unflushed changes could be lost if the process exits unexpectedly. The recommended pattern is a `setInterval` that flushes all loaded levels on a fixed schedule:
+
+```js
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+const universe = new BaseUniverse({
+  port: 25565,
+  postToMainServer: true,
+})
+
+// flush changes on all levels every 60 seconds
+setInterval(() => {
+  universe.levels.forEach(async (level) => {
+    level = await level
+    if (level.changeRecord) level.changeRecord.flushChanges()
+  })
+}, 60000)
+```
+
+<Tip>
+`universe.levels` stores promises. `await` the promise inside `forEach` before accessing `changeRecord`, or the property access will run against the Promise object instead of the level instance.
+</Tip>
+
+You can also call `flushChanges()` directly at any point — for example, before a planned restart or after a bulk world edit:
+
+```js
+await level.changeRecord.flushChanges()
+```
+
+`flushChanges()` compresses the current buffer, appends it as a length-prefixed block to `vhs.bin`, and resets `currentActionCount` to zero.
+
+## Keyframe snapshots
+
+For worlds with long histories, replaying every change from the beginning of `vhs.bin` can be slow. classicborne addresses this with `KeyframeRecord`, a SQLite database (`dvr.db`) that stores compressed snapshots of the level state at points during restoration.
+
+A keyframe is created automatically during `restoreBlockChangesToLevel` when restoration has been running for longer than `ChangeRecord.lagKeyframeTime` (250 ms). Subsequent restores start from the most recent applicable keyframe instead of the beginning of the file, then replay only the changes that followed it.
+
+```js
+// The threshold for keyframe creation, in milliseconds
+ChangeRecord.lagKeyframeTime = 250
+```
+
+<Info>
+Keyframe support requires the `sqlite3` native module. If it isn't installed or compiled, classicborne logs a warning and continues without keyframes. The change record still works correctly — restoration just takes longer for large histories.
+</Info>
+
+## Using NullChangeRecord for ephemeral levels
+
+If you don't want changes to persist — for temporary arenas, test levels, or generated worlds that reset on restart — pass `useNullChangeRecord: true` in the `defaults` object:
+
+```js
+const level = await MyLevel.loadIntoUniverse(universe, "temp-arena", {
+  useNullChangeRecord: true,
+})
+```
+
+`NullChangeRecord` implements the same interface as `ChangeRecord` but all methods are no-ops. Block changes are accepted and applied to the in-memory buffer, but nothing is ever written to disk and `restoreBlockChangesToLevel` always returns immediately with zero actions restored.
+
+```js
+// NullChangeRecord — all methods are safe to call, they just do nothing
+await level.changeRecord.flushChanges() // returns 0
+await level.changeRecord.commit()       // returns 0
+await level.changeRecord.dispose()      // no-op
+```
+
+## Trimming history with `commit`
+
+`commit(toActionCount, level)` trims the `vhs.bin` file to a specific action count, discarding everything before that point. This is useful for reclaiming disk space on long-running worlds where early history is no longer needed:
+
+```js
+// Keep only the last 500 actions
+await level.changeRecord.commit(level.changeRecord.actionCount - 500, level)
+```
+
+`commit()` flushes any pending changes first, rewrites the file using a temporary handle, purges keyframes that fall beyond the trim point, and then replaces the original file.
+
+<Warning>
+`commit()` permanently removes history. Actions trimmed by `commit()` cannot be recovered. Make a backup of `vhs.bin` before calling it if you want to preserve the full history.
+</Warning>
+
+## Disposing a level
+
+When you unload a level with `BaseLevel.dispose(saveChanges)`, classicborne flushes pending changes (when `saveChanges` is `true`) and then closes the file handles held by the change record:
+
+```js
+// Flush and close
+await level.dispose(true)
+
+// Discard unflushed changes and close
+await level.dispose(false)
+```
+
+After `dispose()` returns, the level emits `"unloaded"` and removes all its listeners. Remove the level from `universe.levels` if you want a clean reload:
+
+```js
+await level.dispose(true)
+universe.levels.delete("my-level")
+```

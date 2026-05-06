@@ -1,0 +1,129 @@
+---
+title: 'NullChangeRecord API reference'
+description: 'Complete API reference for NullChangeRecord, a no-op ChangeRecord implementation for ephemeral levels that require the same interface without any disk I/O.'
+---
+
+`NullChangeRecord` is a drop-in replacement for `ChangeRecord` that does nothing. It exposes the same constructor signature, instance properties, and methods, but none of them read from or write to disk. Use it for temporary or ephemeral levels where you want the `ChangeRecord` interface to remain valid without incurring any storage overhead.
+
+## Enabling NullChangeRecord
+
+Pass `useNullChangeRecord: true` in the options argument of `BaseLevel.loadIntoUniverse`:
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+await BaseLevel.loadIntoUniverse(universe, "temp", {
+  useNullChangeRecord: true,
+})
+```
+
+## Constructor
+
+`new NullChangeRecord(path, loadedCallback)`
+
+Initializes all shared properties to their neutral defaults and calls `loadedCallback` asynchronously on the next event-loop tick. No files or directories are created.
+
+<ParamField body="path" type="string" required>
+  Stored as `this.path` for interface compatibility. No directory or file is created at this path.
+</ParamField>
+
+<ParamField body="loadedCallback" type="function">
+  Called with the `NullChangeRecord` instance on the next event-loop tick, matching the asynchronous behavior of `ChangeRecord`.
+</ParamField>
+
+```js
+import { NullChangeRecord } from "classicborne/class/level/changeRecord/NullChangeRecord.mjs"
+
+const record = new NullChangeRecord("./ignored-path", (record) => {
+  console.log("NullChangeRecord ready — no files written")
+})
+```
+
+## Instance properties
+
+`NullChangeRecord` exposes the same properties as `ChangeRecord`, all initialized to their default values.
+
+<ResponseField name="path" type="string">
+  The path argument passed to the constructor. Stored for compatibility; no file system access occurs.
+</ResponseField>
+
+<ResponseField name="draining" type="boolean">
+  Always `false`. Never set to `true` because no flush operations are performed.
+</ResponseField>
+
+<ResponseField name="dirty" type="boolean">
+  Always `false`. Never set to `true` because no actions are buffered.
+</ResponseField>
+
+<ResponseField name="actionCount" type="number">
+  Always `0`. `appendAction` is a no-op, so this counter is never incremented.
+</ResponseField>
+
+<ResponseField name="currentActionCount" type="number">
+  Always `0`.
+</ResponseField>
+
+<ResponseField name="vhsFh" type="null">
+  Always `null`. No file handle is opened.
+</ResponseField>
+
+<ResponseField name="currentBuffer" type="null">
+  Always `null`. No in-memory buffer is allocated.
+</ResponseField>
+
+<ResponseField name="bounds" type="Vector3">
+  Defaults to `[64, 64, 64]`, matching `ChangeRecord`.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="addBlockChange(position, block)" type="void">
+  Calls `appendAction`, which is a no-op. Nothing is buffered or written.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `Vector3` | Ignored. |
+  | `block` | `number` | Ignored. |
+</ResponseField>
+
+<ResponseField name="appendAction()" type="void">
+  No-op. Returns immediately without modifying any state.
+</ResponseField>
+
+<ResponseField name="flushChanges()" type="Promise<number>">
+  No-op async method. Returns a promise that resolves to `0`.
+
+  ```js
+  const bytes = await record.flushChanges() // 0
+  ```
+</ResponseField>
+
+<ResponseField name="restoreBlockChangesToLevel()" type="Promise<number>">
+  No-op async method. Returns a promise that resolves to `0`. The level is left unchanged.
+
+  ```js
+  const count = await record.restoreBlockChangesToLevel(level) // 0
+  ```
+</ResponseField>
+
+<ResponseField name="commit()" type="Promise<number>">
+  No-op async method. Returns a promise that resolves to `0`.
+
+  ```js
+  const count = await record.commit(500, level) // 0
+  ```
+</ResponseField>
+
+<ResponseField name="dispose()" type="Promise<void>">
+  No-op async method. Returns a resolved promise immediately. There are no file handles or database connections to close.
+
+  ```js
+  await record.dispose()
+  ```
+</ResponseField>
+
+## Static properties
+
+<ResponseField name="lagKeyframeTime" type="number">
+  Set to `250` to match `ChangeRecord`. Unused at runtime because `restoreBlockChangesToLevel` is a no-op.
+</ResponseField>

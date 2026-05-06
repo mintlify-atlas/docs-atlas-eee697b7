@@ -1,0 +1,198 @@
+---
+title: "Subclass and extend classicborne's base classes"
+description: "All server customization in classicborne flows through subclassing BaseUniverse, BaseLevel, and BasePlayer and overriding their methods."
+---
+
+All customization in classicborne flows through subclassing. Rather than configuring behavior through options objects, you extend `BaseUniverse`, `BaseLevel`, and `BasePlayer` and override the methods that matter to your server. This keeps the protocol layer separate from your game logic and lets you add, replace, or compose behavior at any level of the stack.
+
+## The subclassing pattern
+
+Each base class covers a distinct responsibility:
+
+- **`BaseUniverse`** — manages the server lifecycle, connected players, and loaded levels. You subclass it primarily to set a custom `playerClass`.
+- **`BasePlayer`** — represents a connected client. Override `initialize()` to run setup after authentication, and `checkAuthInfo()` to accept or reject connecting players.
+- **`BaseLevel`** — represents a world. Override the constructor to register event listeners for `playerAdded` and `playerRemoved`, and override `teleportPlayer()` to control how players arrive in the level.
+
+<Steps>
+
+<Step title="Create a custom level">
+
+Extend `BaseLevel` to add per-player event listeners or override the static `teleportPlayer` method. The constructor is the right place for event wiring — call `super(...args)` first, then set up your listeners.
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+class MyLevel extends BaseLevel {
+  constructor(...args) {
+    super(...args)
+    this.positionEventListeners = new Map()
+
+    this.on("playerRemoved", async (player) => {
+      const positionEventListener = this.positionEventListeners.get(player)
+      player.client.removeListener("position", positionEventListener)
+    })
+
+    this.on("playerAdded", async (player) => {
+      const onPosition = (position) => {
+        console.log(position)
+      }
+      player.client.on("position", onPosition)
+      this.positionEventListeners.set(player, onPosition)
+    })
+  }
+
+  static async teleportPlayer(player) {
+    if (super.teleportPlayer(player) === false) return
+    MyLevel.loadIntoUniverse(player.universe, "my-level").then(async (level) => {
+      level.addPlayer(player, [60, 8, 4], [162, 254])
+    })
+  }
+}
+```
+
+<Note>
+Always check `super.teleportPlayer(player) === false` at the top of your override. The base implementation removes the player from their current level and sets `player.teleporting = true`. If it returns `false`, the player is already being teleported elsewhere and you should bail out immediately.
+</Note>
+
+</Step>
+
+<Step title="Create a custom player">
+
+Extend `BasePlayer` and override `initialize()` to control what happens after a player connects. The base `initialize()` authenticates the player and returns `true` on success or `false` on failure — always await it and check the result before continuing.
+
+```js
+import { BasePlayer } from "classicborne/class/player/BasePlayer.mjs"
+
+class MyPlayer extends BasePlayer {
+  async initialize(...args) {
+    const authenticated = await super.initialize(...args)
+    if (!authenticated) return
+    this.universe.addPlayer(this)
+    MyLevel.teleportPlayer(this)
+  }
+}
+```
+
+To reject players at connection time, override `checkAuthInfo()`. Return `true` to allow the player, or return a string to disconnect them with that message.
+
+```js
+class MyPlayer extends BasePlayer {
+  async checkAuthInfo(client, universe, authInfo) {
+    if (!allowedUsernames.includes(authInfo.username)) {
+      return "You are not on the allowlist."
+    }
+    return true
+  }
+
+  async initialize(...args) {
+    const authenticated = await super.initialize(...args)
+    if (!authenticated) return
+    this.universe.addPlayer(this)
+    MyLevel.teleportPlayer(this)
+  }
+}
+```
+
+<Warning>
+`checkAuthInfo()` must return `true` (not a truthy value) to allow the player. Any non-`true` return causes `initialize()` to disconnect the client and return `false`.
+</Warning>
+
+</Step>
+
+<Step title="Create a custom universe">
+
+Extend `BaseUniverse` and set the static `playerClass` property to your custom player class. The universe constructor reads `this.constructor.playerClass` when a client connects, so this is all you need to wire in your player subclass.
+
+```js
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+class MyUniverse extends BaseUniverse {
+  static playerClass = MyPlayer
+}
+
+new MyUniverse({
+  port: 25565,
+  postToMainServer: false,
+})
+```
+
+</Step>
+
+</Steps>
+
+## Full example
+
+The following example wires `MyUniverse`, `MyPlayer`, and `MyLevel` together into a working server. Players authenticate via the default logic, then get added to the universe and teleported to `"my-level"`. The level listens for position events from each player and cleans up when they leave.
+
+```js server.mjs
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+import { BasePlayer } from "classicborne/class/player/BasePlayer.mjs"
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+class MyLevel extends BaseLevel {
+  constructor(...args) {
+    super(...args)
+    this.positionEventListeners = new Map()
+
+    this.on("playerRemoved", async (player) => {
+      const positionEventListener = this.positionEventListeners.get(player)
+      player.client.removeListener("position", positionEventListener)
+    })
+
+    this.on("playerAdded", async (player) => {
+      const onPosition = (position) => {
+        console.log(position)
+      }
+      player.client.on("position", onPosition)
+      this.positionEventListeners.set(player, onPosition)
+    })
+  }
+
+  static async teleportPlayer(player) {
+    if (super.teleportPlayer(player) === false) return
+    MyLevel.loadIntoUniverse(player.universe, "my-level").then(async (level) => {
+      level.addPlayer(player, [60, 8, 4], [162, 254])
+    })
+  }
+}
+
+class MyPlayer extends BasePlayer {
+  async initialize(...args) {
+    const authenticated = await super.initialize(...args)
+    if (!authenticated) return
+    this.universe.addPlayer(this)
+    MyLevel.teleportPlayer(this)
+  }
+}
+
+class MyUniverse extends BaseUniverse {
+  static playerClass = MyPlayer
+}
+
+new MyUniverse({
+  port: 25565,
+  postToMainServer: false,
+})
+```
+
+## Tips
+
+<AccordionGroup>
+
+<Accordion title="Always call super() before using this">
+  In subclass constructors, `super(...args)` must come before any access to `this`. For `BaseLevel`, pass through all constructor arguments with `...args` so the base class receives `bounds` and `blocks`.
+</Accordion>
+
+<Accordion title="checkAuthInfo must return exactly true">
+  The `initialize()` method in `BasePlayer` checks `if (rejectionReason !== true)`. Returning `1`, `"ok"`, or any other truthy value triggers disconnection. Return the boolean `true`.
+</Accordion>
+
+<Accordion title="teleportPlayer returns false when the player is busy">
+  `BaseLevel.teleportPlayer()` sets `player.teleporting = true` before removing the player from their current level. If the player is already teleporting, it returns `false` without making changes. Your override must propagate this return value by checking `super.teleportPlayer(player) === false` and returning early.
+</Accordion>
+
+<Accordion title="Remove event listeners in playerRemoved">
+  If you attach listeners to `player.client` in a `playerAdded` handler, always remove them in a matching `playerRemoved` handler. Store each listener reference (for example in a `Map` keyed by player) so you can look it up when the player leaves.
+</Accordion>
+
+</AccordionGroup>

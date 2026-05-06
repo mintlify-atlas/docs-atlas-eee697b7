@@ -1,0 +1,400 @@
+---
+title: 'BaseLevel API reference'
+description: 'API reference for BaseLevel, which manages block data, connected players, drones, and command interpretation for a single Minecraft Classic level.'
+---
+
+`BaseLevel` represents a single game level in a classicborne server. It owns the block buffer, tracks which players and drones are present, and coordinates block changes, permission checks, and command interpretation. You extend `BaseLevel` to add custom game logic, then load it into a `BaseUniverse` via the static `loadIntoUniverse` method.
+
+## Constructor
+
+`new BaseLevel(bounds, blocks)`
+
+Creates a new level with the given dimensions and block data. You typically do not call this directly — use `BaseLevel.loadIntoUniverse` instead, which handles template generation and change record setup.
+
+<ParamField body="bounds" type="Vector3" required>
+  A three-element array `[x, y, z]` defining the level dimensions in blocks.
+</ParamField>
+
+<ParamField body="blocks" type="Buffer" required>
+  A `Buffer` of block IDs, one byte per block, in `x + bounds[0] * (z + bounds[2] * y)` order.
+</ParamField>
+
+```js
+import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+
+const bounds = [64, 64, 64]
+const blocks = Buffer.alloc(bounds[0] * bounds[1] * bounds[2])
+const level = new BaseLevel(bounds, blocks)
+```
+
+## Instance properties
+
+<ResponseField name="players" type="BasePlayer[]">
+  The players currently in the level. Modified by `addPlayer` and `removePlayer` — do not mutate this array directly.
+</ResponseField>
+
+<ResponseField name="bounds" type="Vector3">
+  The `[x, y, z]` dimensions of the level as passed to the constructor.
+</ResponseField>
+
+<ResponseField name="blocks" type="Buffer">
+  The raw block buffer. Each byte is a block ID. Index a position with `x + bounds[0] * (z + bounds[2] * y)`. Prefer `getBlock` and `setBlock` over reading and writing this buffer directly.
+</ResponseField>
+
+<ResponseField name="allowList" type="string[]">
+  Usernames allowed to place blocks. When empty, all players have build permission. Checked by `userHasPermission`.
+</ResponseField>
+
+<ResponseField name="drones" type="Set<Drone>">
+  All `Drone` instances currently in the level, including player-linked drones.
+</ResponseField>
+
+<ResponseField name="clientDrones" type="Map<Client, Drone>">
+  Maps each connected `Client` to the `Drone` representing their player. Populated by `addPlayer` and cleared by `removePlayer`.
+</ResponseField>
+
+<ResponseField name="commandInterpreter" type="BaseLevelCommandInterpreter">
+  The command interpreter attached to this level. Created from `BaseLevel.commandInterpreterClass` in the constructor.
+</ResponseField>
+
+<ResponseField name="loading" type="boolean">
+  Set to `true` while the level is replaying block changes from a `ChangeRecord`. When `true`, the command interpreter suppresses interactive type questions.
+</ResponseField>
+
+<ResponseField name="blocking" type="boolean">
+  Set to `true` by the command interpreter when it is waiting for interactive player input. Block placements are consumed as command argument answers rather than being applied to the level.
+</ResponseField>
+
+<ResponseField name="changeRecord" type="ChangeRecord | NullChangeRecord">
+  Handles persistence of block and command history. Assigned by `loadIntoUniverse`. Use `NullChangeRecord` (via `defaults.useNullChangeRecord`) for ephemeral levels that should not persist.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  The level's identifier within the universe. Set by `loadIntoUniverse` to the `spaceName` argument.
+</ResponseField>
+
+<ResponseField name="universe" type="BaseUniverse">
+  The `BaseUniverse` this level belongs to. Set by `loadIntoUniverse`.
+</ResponseField>
+
+<ResponseField name="template" type="BaseTemplate">
+  The template used to generate this level's initial block data. Set by `loadIntoUniverse`.
+</ResponseField>
+
+<ResponseField name="blockset" type="number[][]">
+  Optional custom block definitions sent to clients on level load. Each entry is an array of color and draw-mode values. Defaults to the static `blockset` value.
+</ResponseField>
+
+<ResponseField name="environment" type="object">
+  Optional environment settings sent to clients via the `LevelEnvironment` extension on level load. Defaults to the static `environment` value.
+</ResponseField>
+
+<ResponseField name="texturePackUrl" type="string">
+  Optional URL of a texture pack sent to clients via the `LevelEnvironment` extension on level load.
+</ResponseField>
+
+## Instance methods
+
+<ResponseField name="addPlayer(player, position, orientation)" type="void">
+  Adds a player to the level. Emits `playerAdded`, sets `player.space`, sends the level data via `loadPlayer`, spawns all existing drones for the player, creates a new `Ego`-backed `Drone` for the player, and appends the player to `players`.
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `player` | `BasePlayer` | — | The player to add. |
+  | `position` | `Vector3` | `[0, 0, 0]` | Spawn position in block coordinates. |
+  | `orientation` | `Vector2` | `[0, 0]` | Spawn orientation as `[yaw, pitch]`. |
+
+  ```js
+  level.addPlayer(player, [32, 10, 32], [128, 0])
+  ```
+</ResponseField>
+
+<ResponseField name="removePlayer(player)" type="void">
+  Removes a player from the level. Clears `player.space`, splices the player from `players`, destroys and unregisters the player's drone from `clientDrones`, clears all drones from the player's transmitter, and emits `playerRemoved`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player to remove. |
+</ResponseField>
+
+<ResponseField name="loadPlayer(player, position, orientation)" type="void">
+  Sends the full level buffer, blockset, environment, and spawn position to the player's client. Called internally by `addPlayer`. Call it directly if you need to refresh a player's view of the level without re-adding them (for example, after bulk block changes).
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `player` | `BasePlayer` | — | The player to send level data to. |
+  | `position` | `Vector3` | `[0, 0, 0]` | Spawn position. |
+  | `orientation` | `Vector2` | `[0, 0]` | Spawn orientation. |
+</ResponseField>
+
+<ResponseField name="sendDrones(player)" type="void">
+  Sends all drones currently in the level to a single player's drone transmitter. Called by `addPlayer` so the joining player sees everyone already present.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player to receive the drone updates. |
+</ResponseField>
+
+<ResponseField name="addDrone(drone)" type="void">
+  Adds a drone to the level. Notifies every player in the level of the new drone, then inserts it into `drones`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `drone` | `Drone` | The drone to add. |
+</ResponseField>
+
+<ResponseField name="removeDrone(drone)" type="void">
+  Calls `drone.destroy()` and removes the drone from `drones`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `drone` | `Drone` | The drone to remove. |
+</ResponseField>
+
+<ResponseField name="setBlock(position, block, excludePlayers, saveToRecord)" type="void">
+  Writes a block ID into the buffer and sends a `setBlock` packet to all players except those in `excludePlayers`. When `saveToRecord` is `true`, appends the change to `changeRecord` and flushes if the record exceeds 1024 pending actions.
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `position` | `Vector3` | — | `[x, y, z]` of the block to set. |
+  | `block` | `number` | — | Block ID to write (0–255). |
+  | `excludePlayers` | `BasePlayer[]` | `[]` | Players who should not receive the packet (e.g., the player who placed the block). |
+  | `saveToRecord` | `boolean` | `true` | Whether to persist the change to `changeRecord`. |
+
+  ```js
+  // Set stone at (10, 5, 10), skipping the placing player
+  level.setBlock([10, 5, 10], 1, [player])
+  ```
+</ResponseField>
+
+<ResponseField name="rawSetBlock(position, block)" type="void">
+  Writes a block ID into the buffer without sending any network packets or recording the change. Use this for bulk operations where you will notify players separately (e.g., inside `reload`).
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `Vector3` | `[x, y, z]` of the block to set. |
+  | `block` | `number` | Block ID to write (0–255). |
+</ResponseField>
+
+<ResponseField name="getBlock(position)" type="number">
+  Returns the block ID at the given position by reading `blocks` at the computed offset.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `Vector3` | `[x, y, z]` to read. |
+
+  ```js
+  const blockId = level.getBlock([10, 5, 10])
+  ```
+</ResponseField>
+
+<ResponseField name="withinLevelBounds(position)" type="boolean">
+  Returns `true` if the position is a valid non-negative integer coordinate within `bounds`. Returns `false` if any component is `NaN`, negative, or greater than or equal to the corresponding bound.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `position` | `Vector3` | The position to validate. |
+</ResponseField>
+
+<ResponseField name="userHasPermission(username)" type="boolean">
+  Returns `true` if `allowList` is empty, or if `username` appears in `allowList`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `username` | `string` | The username to check. |
+</ResponseField>
+
+<ResponseField name="reload()" type="void">
+  Re-sends the level data to every player currently in the level, preserving each player's current position and orientation. Also calls `resendDrones` on each player's drone transmitter.
+</ResponseField>
+
+<ResponseField name="dispose(saveChanges)" type="Promise<void>">
+  Flushes and disposes `changeRecord`, emits `unloaded`, removes all event listeners, and disposes the `commandInterpreter`.
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `saveChanges` | `boolean` | `true` | When `true`, flushes any dirty, non-draining `changeRecord` before disposing it. |
+
+  ```js
+  await level.dispose()
+  ```
+</ResponseField>
+
+## Static properties
+
+<ResponseField name="bounds" type="Vector3" default="[64, 64, 64]">
+  Default level dimensions used by `loadIntoUniverse` when `defaults.bounds` is not provided. Override in a subclass to change the default size.
+</ResponseField>
+
+<ResponseField name="environment" type="object">
+  Default environment settings applied to every new level. Override in a subclass to change sky, edge, or cloud appearance.
+
+  <Expandable title="properties">
+    <ResponseField name="sidesId" type="number" default="7">
+      Block ID used for the level sides (bedrock texture by default).
+    </ResponseField>
+    <ResponseField name="edgeId" type="number" default="250">
+      Block ID used for the water edge.
+    </ResponseField>
+    <ResponseField name="edgeHeight" type="number" default="0">
+      Height of the water edge plane.
+    </ResponseField>
+    <ResponseField name="cloudsHeight" type="number" default="256">
+      Height of the cloud layer.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="blockset" type="number[][]" default="[]">
+  Default custom block definitions. Each entry is an array of values describing the block's color channels and draw mode. An empty array means no custom blocks are sent.
+</ResponseField>
+
+<ResponseField name="template" type="BaseTemplate">
+  The template used to generate blocks when no `defaults.template` is provided. Defaults to an `EmptyTemplate` instance.
+</ResponseField>
+
+<ResponseField name="standardBounds" type="Vector3" deprecated>
+  Deprecated alias for `BaseLevel.bounds`. Use `BaseLevel.bounds` instead.
+</ResponseField>
+
+<ResponseField name="commands" type="LevelCommand[]" default="[]">
+  List of `LevelCommand` classes available in the level. Override in a subclass to register custom commands.
+</ResponseField>
+
+<ResponseField name="commandInterpreterClass" type="typeof BaseLevelCommandInterpreter">
+  The interpreter class instantiated in the constructor. Override in a subclass to use a custom interpreter.
+</ResponseField>
+
+## Static methods
+
+<ResponseField name="loadIntoUniverse(universe, spaceName, defaults)" type="Promise<BaseLevel>">
+  Creates a level and registers it in `universe.levels`, or returns the existing level or pending promise if already cached. Generates block data from `defaults.template`, constructs the level, sets up a `ChangeRecord` (or `NullChangeRecord`), replays saved block changes, and emits `loaded` when ready.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `universe` | `BaseUniverse` | The universe to load the level into. |
+  | `spaceName` | `string` | Unique identifier for the level within the universe. |
+  | `defaults` | `object` | Options that override static class defaults. |
+
+  <Expandable title="defaults properties">
+    <ParamField body="bounds" type="Vector3">
+      Level dimensions. Falls back to `BaseLevel.bounds`.
+    </ParamField>
+    <ParamField body="template" type="BaseTemplate">
+      Template used to generate the initial block buffer. Falls back to `BaseLevel.template`.
+    </ParamField>
+    <ParamField body="levelClass" type="typeof BaseLevel">
+      Constructor to instantiate. Falls back to the calling class.
+    </ParamField>
+    <ParamField body="blockset" type="number[][]">
+      Custom block definitions. Falls back to `BaseLevel.blockset`.
+    </ParamField>
+    <ParamField body="environment" type="object">
+      Environment settings. Falls back to `BaseLevel.environment`.
+    </ParamField>
+    <ParamField body="texturePackUrl" type="string">
+      Texture pack URL. Falls back to `universe.serverConfiguration.texturePackUrl`.
+    </ParamField>
+    <ParamField body="allowList" type="string[]">
+      Usernames allowed to build. Defaults to `[]` (everyone).
+    </ParamField>
+    <ParamField body="useNullChangeRecord" type="boolean">
+      When `true`, uses `NullChangeRecord` so no changes are persisted.
+    </ParamField>
+    <ParamField body="arguments" type="any[]">
+      Extra constructor arguments spread after `bounds` and `blocks`.
+    </ParamField>
+  </Expandable>
+
+  ```js
+  import { BaseLevel } from "classicborne/class/level/BaseLevel.mjs"
+  import { MyTemplate } from "./MyTemplate.mjs"
+
+  const level = await BaseLevel.loadIntoUniverse(universe, "spawn", {
+    bounds: [128, 64, 128],
+    template: new MyTemplate(),
+    allowList: ["Alice", "Bob"],
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="teleportPlayer(player, spaceName, defaults)" type="Promise<void>">
+  Removes the player from their current level (if any) and loads them into the target level. Returns `false` without doing anything if the player is already mid-teleport.
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `player` | `BasePlayer` | — | The player to teleport. |
+  | `spaceName` | `string` | — | Identifier of the destination level. |
+  | `defaults` | `object` | `{}` | Passed to `loadIntoUniverse` if the level does not yet exist. |
+
+  <Warning>
+    Subclasses are expected to override `teleportPlayer` to specify a spawn position and custom level class. Calling the base implementation directly teleports the player to `[60, 8, 4]` with orientation `[162, 254]`.
+  </Warning>
+
+  ```js
+  // Pattern for subclassing:
+  static async teleportPlayer(player, spaceName) {
+    if (super.teleportPlayer(player) === false) return
+    MyLevel.loadIntoUniverse(player.universe, spaceName, {
+      levelClass: MyLevel,
+    }).then((level) => {
+      level.addPlayer(player, [32, 10, 32], [128, 0])
+    })
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="getCommandClassFromName(command)" type="LevelCommand | undefined">
+  Searches `BaseLevel.commands` for a class whose `name` or `aliases` matches the first word of `command` (case-insensitive).
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `command` | `string` | The full command string, e.g. `"cuboid 1"`. |
+</ResponseField>
+
+<ResponseField name="sendBlockset(client, blockset)" type="void">
+  Sends custom block definitions to a single client using the `BlockDefinitions` and `BlockDefinitionsExtended` extensions. Called automatically inside `loadPlayer` when `this.blockset` is set.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `client` | `Client` | The client to send definitions to. |
+  | `blockset` | `number[][]` | Array of block definition entries. |
+</ResponseField>
+
+## Events
+
+`BaseLevel` extends `TypedEmitter` and emits the following events.
+
+<ResponseField name="playerAdded" type="event">
+  Emitted at the start of `addPlayer`, before the level data is sent to the client.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player being added. |
+
+  ```js
+  level.on("playerAdded", (player) => {
+    console.log(`${player.authInfo.username} entered the level.`)
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="playerRemoved" type="event">
+  Emitted at the end of `removePlayer`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player that was removed. |
+</ResponseField>
+
+<ResponseField name="loaded" type="event">
+  Emitted by `loadIntoUniverse` after the `ChangeRecord` has finished replaying saved block changes.
+</ResponseField>
+
+<ResponseField name="unloaded" type="event">
+  Emitted at the start of `dispose`, before listeners are removed.
+</ResponseField>
+
+<ResponseField name="levelLoaded" type="event">
+  Emitted on the `player` (not the level) after the client finishes receiving the level buffer. Listen on the player rather than the level.
+</ResponseField>

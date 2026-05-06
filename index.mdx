@@ -1,133 +1,73 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "classicborne: Minecraft Classic server library"
+description: "classicborne is a Node.js library for Minecraft Classic servers with CPE support. Extend base classes to build custom worlds, players, and game logic."
 ---
 
-## Setting up
+classicborne is a general-purpose Node.js library for building Minecraft Classic servers. It provides a set of extensible base classes — `BaseUniverse`, `BaseLevel`, and `BasePlayer` — that you subclass to add your own game logic, level generation, player authentication, and persistence.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a Minecraft Classic server running in minutes with classicborne.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Core Concepts" icon="cube" href="/concepts/universe">
+    Understand how universes, levels, players, and drones fit together.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Guides" icon="book-open" href="/guides/extending-classes">
+    Learn how to extend classicborne's base classes for your own server.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/base-universe">
+    Explore the full API surface for every exported class.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What classicborne provides
 
-Everything you need to create world-class documentation.
+classicborne handles the low-level Minecraft Classic protocol so you can focus on building your server's unique features.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="CPE support" icon="plug">
+    Full support for Classic Protocol Extensions — custom blocks, block definitions, player lists, environment settings, and more.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Extensible classes" icon="layer-group">
+    Every core concept is a class you can subclass. Override methods to add custom logic without touching protocol internals.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Multi-level management" icon="map">
+    Load, manage, and unload multiple worlds within a single server instance. Players can move between levels dynamically.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Block change persistence" icon="floppy-disk">
+    An append-only change record stores every block placement with optional keyframe snapshots for fast restoration.
   </Card>
-</Columns>
+</CardGroup>
 
-## Make your content agent ready
+## Installation
 
-Make your docs work for humans and AI agents alike.
+<CodeGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
+```bash npm
+npm install classicborne
+```
 
-## Need inspiration?
+```bash yarn
+yarn add classicborne
+```
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+```bash pnpm
+pnpm add classicborne
+```
+
+</CodeGroup>
+
+## Minimal server
+
+```js quickstart.mjs
+import { BaseUniverse } from "classicborne/class/server/BaseUniverse.mjs"
+
+const universe = new BaseUniverse({
+  port: 25565,
+  postToMainServer: false,
+})
+```
+
+<Note>
+  Always import classes directly from their module paths (e.g. `classicborne/class/server/BaseUniverse.mjs`) rather than from the barrel `classicborne` index. The barrel file is intended only for documentation generation and some imports may fail at runtime.
+</Note>

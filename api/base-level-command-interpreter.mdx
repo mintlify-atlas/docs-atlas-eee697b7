@@ -1,0 +1,209 @@
+---
+title: 'BaseLevelCommandInterpreter API'
+description: 'Complete API reference for BaseLevelCommandInterpreter, which parses and executes level commands and manages interactive block-placement input from players.'
+---
+
+`BaseLevelCommandInterpreter` receives command strings from players or from a `ChangeRecord` during level loading, resolves missing arguments interactively through block placements, and commits the final action to the level. When interactive input is in progress, the interpreter sets `level.blocking = true` so the level knows to route block placements as answers rather than writes. You attach a single interpreter instance to a `BaseLevel` via `level.commandInterpreter`.
+
+## TypeQuestion
+
+`TypeQuestion` carries metadata about a single interactive prompt. The interpreter emits a `typeQuestion` event with a `TypeQuestion` instance whenever it needs the player to supply a missing argument.
+
+### Constructor
+
+`new TypeQuestion(type, typeName)`
+
+<ParamField body="type" type="string" required>
+  The broad category of data being requested. One of `"block"` or `"position"`.
+</ParamField>
+
+<ParamField body="typeName" type="string" required>
+  The full type string from the command layout (e.g. `"block:primary"` or `"position:start"`). Use this to give the player context about which argument is needed.
+</ParamField>
+
+```js
+interpreter.on("typeQuestion", (question) => {
+  if (question.type === "block") {
+    player.sendMessage(`Select a block for: ${question.typeName}`)
+  } else if (question.type === "position") {
+    player.sendMessage(`Click a position for: ${question.typeName}`)
+  }
+})
+```
+
+### Instance properties
+
+<ResponseField name="type" type="string">
+  The data category: `"block"` or `"position"`.
+</ResponseField>
+
+<ResponseField name="typeName" type="string">
+  The full layout type string from the command, as passed to the constructor.
+</ResponseField>
+
+## BaseLevelCommandInterpreter
+
+### Constructor
+
+`new BaseLevelCommandInterpreter(level)`
+
+Creates the interpreter, sets `level.blocking = false` and `level.loading = false`.
+
+<ParamField body="level" type="BaseLevel" required>
+  The `BaseLevel` this interpreter acts on. Stored as `this.level`.
+</ParamField>
+
+```js
+import { BaseLevelCommandInterpreter } from "classicborne/class/level/BaseLevelCommandInterpreter.mjs"
+
+// Normally instantiated automatically via BaseLevel.commandInterpreterClass:
+const interpreter = new BaseLevelCommandInterpreter(level)
+```
+
+### Instance properties
+
+<ResponseField name="level" type="BaseLevel">
+  The level this interpreter is attached to. Set in the constructor.
+</ResponseField>
+
+### Instance methods
+
+<ResponseField name="interpretCommand(command, player, actionBytes)" type="boolean">
+  Looks up the command class by name, sets `level.blocking = true`, and begins resolving arguments. If the command string includes inline arguments (text after the command name), `processCommandArguments` handles them. Otherwise, `inferCurrentCommand` attempts to fill arguments from the player's current context or emits `typeQuestion` events for missing ones.
+
+  Returns `true` if the command was found and processing started, `false` if the command name was not recognized, and `true` if `command` is an empty string (no-op).
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `command` | `string` | `"cuboid 1"` | Full command string, including the command name and any inline arguments. |
+  | `player` | `BasePlayer \| null` | `null` | The player issuing the command. Used for permission and context lookups. |
+  | `actionBytes` | `number[]` | `[]` | Pre-populated action byte array, used when replaying from a `ChangeRecord`. |
+
+  ```js
+  // Issue a command with inline arguments
+  interpreter.interpretCommand("cuboid 1", player)
+
+  // Replay from a change record (level.loading = true suppresses typeQuestion events)
+  interpreter.interpretCommand("cuboid", null, [1, 10, 5, 10, 20, 15, 20])
+  ```
+</ResponseField>
+
+<ResponseField name="inferCurrentCommand(providedData, player)" type="boolean | undefined">
+  Advances the current command's argument resolution by one step. If `providedData` contains a matching value for the current layout element type (`"block"` or `"position"`), it appends the value(s) to `currentCommandActionBytes` and recurses. If the data is missing and `level.loading` is `false`, emits a `typeQuestion` event and returns `undefined` to pause. When all layout elements are resolved, calls `commitAction`.
+
+  Layout elements prefixed with `&` are optional: the interpreter skips them by pushing `0` without prompting.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `providedData` | `object \| null` | Object with `block` (number) and/or `position` (Vector3) from the player's current context. |
+  | `player` | `BasePlayer \| null` | The player whose context is being used. |
+</ResponseField>
+
+<ResponseField name="processCommandArguments(splitCommand, player)" type="void">
+  Parses string tokens from a split command into action bytes according to the current command's layout. Handles `"block"`, `"position"`, and `"enum"` layout types. Emits a `parsingError` event and stops early if a token is invalid. After consuming all parseable tokens, delegates remaining resolution to `inferCurrentCommand`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `splitCommand` | `string[]` | Tokens after the command name (e.g. `["1", "10", "5", "10"]`). |
+  | `player` | `BasePlayer` | The player issuing the command, used for `"hand"` block resolution and error events. |
+</ResponseField>
+
+<ResponseField name="commitAction(player)" type="void">
+  Executes `currentCommand.action(currentCommandActionBytes)`, appends the action to `changeRecord` (unless `level.loading` is `true`), emits `commandExecuted`, and reloads the level if the command's `requiresRefreshing` flag is set. If `player.repeatMode` is active, resets the argument index and immediately prompts for the next round of arguments. Otherwise clears `currentCommand` and sets `level.blocking = false`.
+
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `player` | `BasePlayer \| null` | `null` | The player who executed the command. Used to check `repeatMode`. |
+</ResponseField>
+
+<ResponseField name="dispose()" type="void">
+  Calls `removeAllListeners()` to clean up all event subscriptions. Called by `BaseLevel.dispose`.
+</ResponseField>
+
+### Static properties
+
+<ResponseField name="parsingErrors" type="object">
+  Numeric constants used as the `errorType` argument of the `parsingError` event.
+
+  <Expandable title="properties">
+    <ResponseField name="invalidBlockId" type="number" default="0">
+      The provided block argument could not be parsed as a valid byte (0–255).
+    </ResponseField>
+    <ResponseField name="invalidPosition" type="number" default="1">
+      One or more components of the provided position could not be parsed as valid bytes.
+    </ResponseField>
+    <ResponseField name="positionOutBounds" type="number" default="2">
+      The position was a valid byte triplet but fell outside the level's bounds.
+    </ResponseField>
+  </Expandable>
+
+  ```js
+  interpreter.on("parsingError", (player, errorType) => {
+    const messages = {
+      [BaseLevelCommandInterpreter.parsingErrors.invalidBlockId]: "Invalid block ID.",
+      [BaseLevelCommandInterpreter.parsingErrors.invalidPosition]: "Invalid position.",
+      [BaseLevelCommandInterpreter.parsingErrors.positionOutBounds]: "Position is out of bounds.",
+    }
+    player.sendMessage(messages[errorType] ?? "Unknown error.")
+  })
+  ```
+</ResponseField>
+
+### Static methods
+
+<ResponseField name="validateByte(number)" type="boolean">
+  Returns `true` if `number` is a non-NaN integer in the range 0–255 (inclusive). Returns `false` otherwise. Used internally when parsing block IDs and position components from command strings.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `number` | `number` | The value to validate. |
+
+  ```js
+  BaseLevelCommandInterpreter.validateByte(128)  // true
+  BaseLevelCommandInterpreter.validateByte(256)  // false
+  BaseLevelCommandInterpreter.validateByte(NaN)  // false
+  BaseLevelCommandInterpreter.validateByte(-1)   // false
+  ```
+</ResponseField>
+
+## Events
+
+`BaseLevelCommandInterpreter` extends `TypedEmitter` and emits the following events.
+
+<ResponseField name="parsingError" type="event">
+  Emitted when `processCommandArguments` encounters a token it cannot convert to the expected type.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `player` | `BasePlayer` | The player who issued the malformed command. |
+  | `errorType` | `number` | One of the `BaseLevelCommandInterpreter.parsingErrors` constants. |
+</ResponseField>
+
+<ResponseField name="typeQuestion" type="event">
+  Emitted by `inferCurrentCommand` when the interpreter needs interactive input from the player. The level is already in `blocking` state when this fires. Listen to this event to display a prompt to the player.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `typeQuestion` | `TypeQuestion` | Describes the type and name of the argument being requested. |
+
+  ```js
+  interpreter.on("typeQuestion", (question) => {
+    player.sendMessage(`Click to set ${question.typeName} (${question.type})`)
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="commandExecuted" type="event">
+  Emitted by `commitAction` after a command's `action` runs and the result is appended to `changeRecord`.
+
+  | Parameter | Type | Description |
+  |-----------|------|-------------|
+  | `commandName` | `string` | The `name` property of the executed command class. |
+  | `actionBytes` | `number[]` | The full action byte array that was passed to `action`. |
+
+  ```js
+  interpreter.on("commandExecuted", (commandName, actionBytes) => {
+    console.log(`Executed "${commandName}" with bytes: ${actionBytes.join(", ")}`)
+  })
+  ```
+</ResponseField>
